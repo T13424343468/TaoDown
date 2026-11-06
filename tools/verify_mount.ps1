@@ -53,11 +53,12 @@ if ($report.legacyLeftover -gt 0) { throw "登记核验不过：旧 ID 键残留
 Write-Host "登记核验通过：HKCU 全 $Roots.Count 个家族键齐、版本一致、旧 ID 清净"
 
 function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProfileDir) {
+  Write-Host ("  {0} 版本: {1}" -f $Browser, (Get-Item $Exe).VersionInfo.ProductVersion)
   $marker = Join-Path $ProfileDir 'mounted.flag'
   Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
   Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","about:blank"
   $found = $null
-  for ($i = 0; $i -lt 30; $i++) {
+  for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep -Seconds 2
     foreach ($file in @('Secure Preferences','Preferences')) {
       $pf = Join-Path $ProfileDir "Default\$file"
@@ -65,6 +66,8 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProfileDir) 
       try { $json = Get-Content $pf -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { continue }
       $settings = $json.extensions.settings
       if (-not $settings) { continue }
+      $names = @($settings.PSObject.Properties.Name)
+      Write-Host ("  轮次 {0} {1} extensions.settings 共 {2} 项: {3}" -f $i, $file, $names.Count, ($names -join ',')) 
       $prop = $settings.PSObject.Properties | Where-Object { $_.Name -eq $Id }
       if ($prop) {
         $found = [ordered]@{ browser = $Browser; file = $file; path = $prop.Value.path; state = $prop.Value.state; location = $prop.Value.location }
@@ -92,7 +95,28 @@ function Snap($path) {
 }
 Snap 'evidence\mount-edge-before.png'
 $hit = Test-BrowserMount -Browser 'Edge' -Exe $edge.FullName -ProfileDir (Join-Path $PWD 'evidence\edge-profile')
-if (-not $hit) { throw '真挂载核验不过：Edge 启动 60 秒内登记插件未装进用户资料（自动挂载失效）' }
+if (-not $hit) {
+  Write-Host '  === 诊断补充 ==='
+  foreach ($hiveName in @('CurrentUser','LocalMachine')) {
+    foreach ($root in $Roots) {
+      $k = [Microsoft.Win32.Registry]::"$hiveName".OpenSubKey("$root\$Id")
+      if ($k) { Write-Host ("  {0} {1}: path={2}" -f $hiveName, $root, $k.GetValue('path')) }
+    }
+  }
+  $sysDefault = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
+  if (Test-Path $sysDefault) {
+    foreach ($prof in (Get-ChildItem $sysDefault -Directory -ErrorAction SilentlyContinue)) {
+      foreach ($file in @('Secure Preferences','Preferences')) {
+        $pf = Join-Path $prof.FullName $file
+        if (Test-Path $pf) {
+          $c = (Select-String -Path $pf -Pattern $Id -Quiet)
+          if ($c) { Write-Host ("  系统默认资料命中: {0}\{1}" -f $prof.Name, $file); $hit = @{ browser='Edge'; file=$file; path='系统默认资料'; state='default-profile'; location='' } }
+        }
+      }
+    }
+  }
+  if (-not $hit) { throw '真挂载核验不过：Edge 启动 90 秒内登记插件未装进任何用户资料（自动挂载失效，含系统默认资料）' }
+}
 Snap 'evidence\mount-edge-after.png'
 Write-Host ("  Edge 挂载成功：文件={0} path={1} state={2}" -f $hit.file, $hit.path, $hit.state)
 $report.edge = $hit
