@@ -98,7 +98,13 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [s
 function Test-BrowserManualLoad([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir, [string]$ExtDir) {
   Write-Host ("  {0} 手动加载实测：--load-extension {1}" -f $Browser, $ExtDir)
   Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process $Exe -ArgumentList "--no-first-run","--no-default-browser-check","--user-data-dir=`"$ProfileDir`"","--load-extension=`"$ExtDir`"","about:blank"
+  Start-Process $Exe -ArgumentList "--no-first-run","--no-default-browser-check","--enable-logging","--v=1","--user-data-dir=`"$ProfileDir`"","--load-extension=`"$ExtDir`"","about:blank"
+  # 诊断：进程起没起、资料目录建没建（Opera 疑似不认 Chromium 通用参数，先坐实现场）
+  Start-Sleep -Seconds 4
+  $proc = Get-Process $ProcName -ErrorAction SilentlyContinue
+  Write-Host ("  {0} 进程探测: {1}" -f $Browser, $(if ($proc) { "运行中 pid=$($proc.Id -join ',')" } else { '未启动' }))
+  if (-not (Test-Path $ProfileDir)) { Write-Host ("  {0} 资料目录未创建: {1}" -f $Browser, $ProfileDir) }
+  else { Write-Host ("  {0} 资料目录内容: {1}" -f $Browser, ((Get-ChildItem $ProfileDir -ErrorAction SilentlyContinue | Select-Object -First 8 | ForEach-Object Name) -join ', ')) }
   $found = $null
   for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep -Seconds 2
