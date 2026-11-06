@@ -98,7 +98,7 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [s
 function Test-BrowserManualLoad([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir, [string]$ExtDir) {
   Write-Host ("  {0} 手动加载实测：--load-extension {1}" -f $Browser, $ExtDir)
   Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","--load-extension=`"$ExtDir`"","about:blank"
+  Start-Process $Exe -ArgumentList "--no-first-run","--no-default-browser-check","--user-data-dir=`"$ProfileDir`"","--load-extension=`"$ExtDir`"","about:blank"
   $found = $null
   for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep -Seconds 2
@@ -145,7 +145,7 @@ $Browsers = @(
   @{ Name='Brave';    Proc='brave';   ExeFile='brave.exe';   Choco='brave';           Winget='BraveSoftware.BraveBrowser'; Exes=@('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe','C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe') },
   @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';         Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") },
   @{ Name='Opera';    Proc='opera';   ExeFile='opera.exe';   Choco='opera';           Winget='Opera.Opera';         Rounds=90; ManualExt=$true; Exes=@('C:\Program Files\Opera\opera.exe',"$env:LOCALAPPDATA\Programs\Opera\opera.exe") },
-  @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco=$null;             Winget='Yandex.Browser';      Rounds=45; ManualExt=$false; Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
+  @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco='yandex-browser'; Winget='Yandex.Browser';      Rounds=45; ManualExt=$false; Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
 )
 
 function Get-BrowserExe($spec) {
@@ -169,6 +169,7 @@ function Install-Browser($spec) {
   if ($spec.Winget) {
     Write-Host ("  winget 兜底: {0}" -f $spec.Winget)
     winget install --id $spec.Winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | ForEach-Object { Write-Host "  winget: $_" }
+    Write-Host ("  winget 退出码: {0}" -f $LASTEXITCODE)
     if ($LASTEXITCODE -eq 0) { Write-Host '  winget 安装完成'; return $true }
   }
   return $false
@@ -196,7 +197,7 @@ foreach ($spec in $Browsers) {
     Dump-ProfileExtensions $prof $spec.Name
     # 内核不认登记挂载时的手动加载实测（当前仅 Opera 需要此兜底）
     if ($spec.ManualExt) {
-      $extDir = Join-Path $PSScriptRoot '..\src\extension'
+      $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
       if (Test-Path (Join-Path $extDir 'manifest.json')) {
         Write-Host ("  {0} 登记 90*2 秒未自动挂载，转手动加载实测" -f $spec.Name)
         $hit = Test-BrowserManualLoad -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof -ExtDir $extDir
