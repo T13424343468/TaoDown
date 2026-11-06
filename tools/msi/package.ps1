@@ -515,7 +515,7 @@ $wxs = @"
 
     </StandardDirectory>
 
-    <Feature Id="Core" Title="TaoDown 主程序" Description="下载本体、双引擎、网盘组件与浏览器插件（必装）" Level="1" AllowAbsent="no">$coreRefsXml
+    <Feature Id="Core" Title="TaoDown 主程序" Description="下载本体、双引擎与浏览器插件（必装）" Level="1" AllowAbsent="no">$coreRefsXml
 
       <ComponentRef Id="MenuShortcutC" />
 

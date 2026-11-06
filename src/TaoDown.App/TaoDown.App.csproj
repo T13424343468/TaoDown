@@ -16,9 +16,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>2.3.0</Version>
-    <FileVersion>2.3.0.0</FileVersion>
-    <AssemblyVersion>2.3.0.0</AssemblyVersion>
+    <Version>2.4.0</Version>
+    <FileVersion>2.4.0.0</FileVersion>
+    <AssemblyVersion>2.4.0.0</AssemblyVersion>
     <AssemblyName>TaoDown</AssemblyName>
     <ApplicationIcon>Assets\taodown.ico</ApplicationIcon>
   </PropertyGroup>
@@ -31,7 +31,6 @@
     <!-- 引擎文件按存在性引用：被杀毒软件误隔离时编译不中断，由 build.bat 第 4/6 步显式校验并给出提示 -->
     <None Include="..\..\tools\vendor\aria2-next\aria2-next.exe" Condition="Exists('..\..\tools\vendor\aria2-next\aria2-next.exe')" CopyToOutputDirectory="PreserveNewest" Link="engine\aria2-next.exe" />
     <None Include="..\..\tools\vendor\aria2\aria2c.exe" Condition="Exists('..\..\tools\vendor\aria2\aria2c.exe')" CopyToOutputDirectory="PreserveNewest" Link="engine\aria2c.exe" />
-    <None Include="..\..\tools\vendor\openlist\openlist.exe" Condition="Exists('..\..\tools\vendor\openlist\openlist.exe')" CopyToOutputDirectory="PreserveNewest" Link="openlist\openlist.exe" />
   </ItemGroup>
 
   <ItemGroup>

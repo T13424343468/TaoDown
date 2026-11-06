@@ -146,3 +146,11 @@
    - 组包 155 项断言全过（v2.49 152 + taodown.crx + registry_paths.json + pack_crx.py；pem/pack_v2.49.py 排除）。
 4. **MSI 断言升级**：verify_msi.ps1 加 taodown.crx 缺失硬门槛 + 落点断言 extension 目录 + Registry 表断言（registry_paths.json 全部 17+2 键必在、path 值必匹配 taodown\.crx），构建不绿不出包。
 5. **边界如实**：沙箱无 Windows 注册表/pwsh/MSI 构建；登记真机行为由 build.bat + verify_msi.ps1 断言链与用户真机验收兜底；夸克/360 自动挂载不可行（内核只认开发者模式），保留手动加载 + 一键打开扩展页引导，属内核约束非产品缺口。
+
+
+## 2026-11-07 网盘模块残留清理（v2.4.0）
+
+1. **用户决定**：网盘整个模块砍掉，代码一并清理（此前 2026-11-02 已移除聚合服务/网盘浏览页/账号管理，本次清掉最后残留）。
+2. **清理项**：移除 csproj 中 openlist.exe 随包引用与 Exists 保护；删除 docs/ref-OpenList-Integration.md；BATCH-PLAN 批次二标注取消并修正批次四打包描述；package.ps1 安装 Feature 描述去掉「网盘组件」；版本 2.3.0→2.4.0。
+3. **保留项（属核心下载链，非网盘模块）**：LinkClassifier 对网盘签名下载直链的接管分类、浏览器接管询问窗、夸克接管链路（以 TaoDown 询问窗为准）。
+4. **当次验证（沙箱）**：TaoDown.Core.Tests 全量 265/265 全绿（0 失败 0 跳过）；UiSyntaxCheck 编译 0 错误。Windows 端 MSI 打包与真机链路以 windows-ci 全绿为准。
