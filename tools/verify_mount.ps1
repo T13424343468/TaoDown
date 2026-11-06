@@ -1,6 +1,6 @@
 # 云端真机「自动挂载」验证（v2.4.x 全内核覆盖版）：
 # ① 登记核验：BrowserCatalog 全家族 Extensions\<扩展ID> 键（HKCU 必查），path 指向真实插件包、version 与清单一致，旧 ID 键必须清干净；
-# ② 真挂载核验·全内核覆盖：对自动挂载清单内的全部 Chromium 内核浏览器——Edge、Chrome、Chromium、Brave、Vivaldi、Opera、Yandex——
+# ② 真挂载核验·全内核覆盖：对自动挂载清单内的全部 Chromium 内核浏览器——Edge、Chrome、Chromium、Brave、Vivaldi、Yandex——
 #    runner 上没有的现场安装（choco 优先、winget 兜底），逐个真启动，扩展 ID 必须进入用户资料（Secure Preferences/Preferences）；
 #    夸克/360 为手动挂载内核（不认系统级登记，见 BROWSER-EXTENSION.md「手动加载」），自动挂载对其不适用，覆盖口径=登记键核验+手动加载步骤文档化；
 #    Firefox 采用独立扩展体系、无系统级自动挂载机制，不在覆盖清单。
@@ -150,7 +150,7 @@ $Browsers = @(
   @{ Name='Chromium'; Proc='chrome';  ExeFile='chrome.exe';  Choco='chromium';        Winget='Hibbiki.Chromium';    Exes=@('C:\Program Files\Chromium\Application\chrome.exe') },
   @{ Name='Brave';    Proc='brave';   ExeFile='brave.exe';   Choco='brave';           Winget='BraveSoftware.BraveBrowser'; Exes=@('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe','C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe') },
   @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';         Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") },
-  @{ Name='Opera';    Proc='opera';   ExeFile='opera.exe';   Choco='opera';           Winget='Opera.Opera';         Rounds=90; ManualExt=$true; Exes=@('C:\Program Files\Opera\opera.exe',"$env:LOCALAPPDATA\Programs\Opera\opera.exe") },
+  # Opera 用户拍板免测（2026-11-07「抛弃它不管了，反正我也不用」）：登记键核验保留，真启动/手动加载不再要求
   @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco='yandex-browser'; Winget='Yandex.Browser';      Rounds=45; ManualExt=$false; Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
 )
 
