@@ -123,16 +123,20 @@ def build_zip():
     return buf.getvalue(), len(names)
 
 
+def signed_content(signed_header_data, zip_data):
+    # 与 crx_creator.cc 一致：CONTEXT + LE32(len(signed_header_data)) + signed_header_data + zip
+    content = SIGNATURE_CONTEXT + struct.pack("<I", len(signed_header_data)) \
+        + signed_header_data + zip_data
+    return content
+
+
 def build_crx(key, spki_der, zip_data):
     crx_id = bytes.fromhex("".join("%02x" % b for b in hashlib.sha256(spki_der).digest()[:16]))
     signed_header_data = proto_bytes(1, crx_id)  # SignedData{crx_id}
-    digest = hashlib.sha256()
-    digest.update(SIGNATURE_CONTEXT)
-    digest.update(struct.pack("<I", len(signed_header_data)))
-    digest.update(signed_header_data)
-    digest.update(zip_data)
+    # 注意：sign() 入参是原始内容，由算法内部哈希；传摘要会二次哈希导致真浏览器验签失败
     signature = key.sign(
-        digest.digest(), padding.PKCS1v15(), hashes.SHA256())
+        signed_content(signed_header_data, zip_data),
+        padding.PKCS1v15(), hashes.SHA256())
 
     proof = (proto_bytes(1, spki_der)      # AsymmetricKeyProof.public_key
              + proto_bytes(2, signature))  # AsymmetricKeyProof.signature
@@ -210,14 +214,9 @@ def verify_crx(crx_data, expect_id, expect_version):
             else:
                 raise AssertionError(f"未知 proof 字段 {f}")
         assert pk and sig, "proof 字段缺失"
-        shd_len = struct.pack("<I", len(shd))
-        digest = hashlib.sha256()
-        digest.update(SIGNATURE_CONTEXT)
-        digest.update(shd_len)
-        digest.update(shd)
-        digest.update(zip_data)
+        content = signed_content(shd, zip_data)
         pub = load_der_public_key(pk)
-        pub.verify(sig, digest.digest(), padding.PKCS1v15(), hashes.SHA256())
+        pub.verify(sig, content, padding.PKCS1v15(), hashes.SHA256())
         derived = id_from_spki(pk)
         assert derived == expect_id, f"ID 推导不符: {derived} != {expect_id}"
 
