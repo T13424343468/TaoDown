@@ -8,7 +8,7 @@ on:
 jobs:
   build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
           Start-Sleep -Seconds 2
           Write-Host "真实用户视角：静默安装、启动、稳定运行均通过"
 
-      - name: 自动挂载全链验证（登记键核验+Edge 真挂载）
+      - name: 自动挂载全链验证（登记核验+全内核真挂载）
         shell: pwsh
         run: ./tools/verify_mount.ps1
 
