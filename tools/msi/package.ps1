@@ -188,8 +188,12 @@ $wxs = @"
       <Custom Action="KillRunningTaoDown" After="SetKillCmd" />
       <Custom Action="SetKillCmdHost" After="KillRunningTaoDown" />
       <Custom Action="KillRunningTaoDownHost" After="SetKillCmdHost" />
-      <Custom Action="SetDefaultInstallDir" Sequence="1150" />
-    </InstallExecuteSequence>
+      <Custom Action="SetDefaultInstallDir" Before="CostFinalize" />
+    </InstallExecuteSequence>
+<InstallUISequence>
+      <Custom Action="SetDefaultInstallDir" Before="CostFinalize" />
+    </InstallUISequence>
+
 
     <Icon Id="TaoDownIco" SourceFile="$publishRoot\TaoDown.ico" />
 
@@ -454,7 +458,7 @@ $wxs = @"
       <InstallUISequence>
 
 
-        <Custom Action="SetDefaultInstallDir" Sequence="1150" />
+        <Custom Action="SetDefaultInstallDir" Before="CostFinalize" />
 
         <Show Dialog="MainDlg" Sequence="1250" />
 

@@ -72,6 +72,8 @@ jobs:
             foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
               $cand = Join-Path $d "Program Files\TaoDown\TaoDown.exe"
               if (Test-Path $cand) { return $cand }
+              $cand = Join-Path $d "Program Files (x86)\TaoDown\TaoDown.exe"
+              if (Test-Path $cand) { return $cand }
             }
             foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
               $pf = Join-Path $d "Program Files"
@@ -125,6 +127,8 @@ jobs:
             }
             foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
               $cand = Join-Path $d "Program Files\TaoDown\TaoDown.exe"
+              if (Test-Path $cand) { return $cand }
+              $cand = Join-Path $d "Program Files (x86)\TaoDown\TaoDown.exe"
               if (Test-Path $cand) { return $cand }
             }
             foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
