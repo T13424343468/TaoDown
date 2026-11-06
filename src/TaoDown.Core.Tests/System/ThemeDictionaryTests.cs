@@ -12,9 +12,7 @@ public class ThemeDictionaryTests
 {
     private static string AppDir()
     {
-        var appDir = Path.Combine(Directory.GetCurrentDirectory(), "..", "TaoDown.App");
-        if (!Directory.Exists(appDir))
-            appDir = "/root/workspace/projects/201259/src/TaoDown.App";
+        var appDir = FindAppDir();
         return appDir;
     }
 
@@ -40,6 +38,27 @@ public class ThemeDictionaryTests
         return map;
     }
 
+    /// <summary>
+    /// App 工程目录定位（云端适配）：从当前目录与程序目录逐级向上找 src\TaoDown.App，
+    /// 兼容本地沙箱、GitHub 云端两种布局；沙箱原路径保留为最后兜底。
+    /// </summary>
+    private static string FindAppDir()
+    {
+        var starts = new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory };
+        foreach (var start in starts)
+        {
+            if (string.IsNullOrWhiteSpace(start)) continue;
+            var d = new DirectoryInfo(start);
+            for (var i = 0; i < 10 && d != null; i++, d = d.Parent)
+            {
+                var cand = Path.Combine(d.FullName, "src", "TaoDown.App");
+                if (Directory.Exists(cand)) return cand;
+                cand = Path.Combine(d.FullName, "TaoDown.App");
+                if (Directory.Exists(cand)) return cand;
+            }
+        }
+        return "/root/workspace/projects/201259/src/TaoDown.App";
+    }
     [Fact]
     public void ThreeDictionaries_SameKeySet()
     {

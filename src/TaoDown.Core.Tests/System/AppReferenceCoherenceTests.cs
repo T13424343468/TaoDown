@@ -8,12 +8,31 @@ namespace TaoDown.Tests;
 /// App 工程所有 .cs 对 ThemeService 的静态成员引用必须在 ThemeService.cs 有定义。</summary>
 public class AppReferenceCoherenceTests
 {
+    /// <summary>
+    /// App 工程目录定位（云端适配）：从当前目录与程序目录逐级向上找 src\TaoDown.App，
+    /// 兼容本地沙箱、GitHub 云端两种布局；沙箱原路径保留为最后兜底。
+    /// </summary>
+    private static string FindAppDir()
+    {
+        var starts = new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory };
+        foreach (var start in starts)
+        {
+            if (string.IsNullOrWhiteSpace(start)) continue;
+            var d = new DirectoryInfo(start);
+            for (var i = 0; i < 10 && d != null; i++, d = d.Parent)
+            {
+                var cand = Path.Combine(d.FullName, "src", "TaoDown.App");
+                if (Directory.Exists(cand)) return cand;
+                cand = Path.Combine(d.FullName, "TaoDown.App");
+                if (Directory.Exists(cand)) return cand;
+            }
+        }
+        return "/root/workspace/projects/201259/src/TaoDown.App";
+    }
     [Fact]
     public void ThemeService_MemberReferences_AllHaveDefinitions()
     {
-        var appDir = Path.Combine(Directory.GetCurrentDirectory(), "..", "TaoDown.App");
-        if (!Directory.Exists(appDir))
-            appDir = "/root/workspace/projects/201259/src/TaoDown.App";
+        var appDir = FindAppDir();
         Assert.True(Directory.Exists(appDir), $"App 工程目录不存在：{appDir}");
 
         var defs = File.ReadAllText(Path.Combine(appDir, "ThemeService.cs"));
@@ -35,9 +54,7 @@ public class AppReferenceCoherenceTests
     {
         // 2026-11-02 真机 CS0103 教训: 重写文件漏 using TaoDown.Core, 裸用 DataRoot 编译失败。
         // 沙箱兜底: App 工程 .cs 凡出现裸 DataRoot., 必须显式 using TaoDown.Core。
-        var appDir = Path.Combine(Directory.GetCurrentDirectory(), "..", "TaoDown.App");
-        if (!Directory.Exists(appDir))
-            appDir = "/root/workspace/projects/201259/src/TaoDown.App";
+        var appDir = FindAppDir();
         Assert.True(Directory.Exists(appDir), $"App 工程目录不存在：{appDir}");
         var bad = new List<string>();
         foreach (var f in Directory.GetFiles(appDir, "*.cs", SearchOption.AllDirectories)
