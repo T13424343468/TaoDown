@@ -1,0 +1,70 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TaoDown 浏览器接管指引（v2.50）</title>
+<style>
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; color: #222; line-height: 1.75; background: #fafafa; }
+  h1 { font-size: 22px; border-left: 4px solid #c0392b; padding-left: 12px; }
+  h2 { font-size: 17px; margin-top: 28px; color: #c0392b; }
+  code { background: #f0f0f0; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  .card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 14px 18px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .ok { color: #1a7f37; font-weight: 600; }
+  .warn { color: #c62828; font-weight: 600; }
+  ol li { margin: 6px 0; }
+  .note { background: #fff8e6; border: 1px solid #f5e6a8; border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>把 TaoDown 接进浏览器（v2.50：装完即用）</h1>
+<p>装好 TaoDown（v2.50 及以上）后，<strong>重启浏览器即可自动挂载插件——什么都不用点</strong>。之后在浏览器里点下载，会自动弹出保存位置并由 TaoDown 接管下载。</p>
+
+<h2>自动挂载（默认主路）</h2>
+<div class="card">
+<ol>
+  <li>安装 TaoDown（安装器已把插件登记写进系统，装完即生效，无需先启动 TaoDown）。</li>
+  <li>重启浏览器（Chrome / Edge / Brave / Vivaldi / Chromium 等都认）。</li>
+  <li>扩展图标自动出现。点开图标：<span class="ok">绿色 ✓</span> = 已接通；<span class="warn">红色 !</span> = 重启 TaoDown 再试。</li>
+  <li>点任何下载即由 TaoDown 接管。主程序没开也没关系：请求会先落进收件箱，下次启动 TaoDown 时自动补弹保存框，不会丢。</li>
+</ol>
+</div>
+
+<h2>升级说明（旧版 TaoDown → v2.50）</h2>
+<div class="card">
+<p>v2.50 换了新签名钥匙，扩展 ID 变更：</p>
+<ul>
+  <li>浏览器重启后新版插件自动挂载，旧的系统登记已被安装器自动清干净。</li>
+  <li><strong>只有一步要你动手</strong>：如果此前在扩展页手动加载过旧版「TaoDown 接管助手」（夸克等内核常见），请把旧的那份移除一次，避免新旧两个插件同时接管。</li>
+</ul>
+</div>
+
+<h2>手动加载（仅夸克 / 360 等少数内核）</h2>
+<div class="card">
+<p>这些内核不认系统级自动挂载，只认开发者模式加载（一次即可）：</p>
+<ol>
+  <li>先装好 TaoDown 并启动一次（完成宿主注册）。</li>
+  <li>夸克：地址栏输入 <code>quark://extensions/?entry=mainmenu</code>（真机确证：直接输 <code>quark://extensions</code> 会打开空白新标签页），页面左下角开「开发者模式」。</li>
+  <li>若扩展页没有「开发者模式」开关：夸克右上角菜单 →「设置」→「关于夸克」→ 连续快速点击版本号约 7 次，出现「已进入开发者模式」→ 开发者选项里开启「允许加载未签名扩展」（若有「扩展支持」开关一并开启）。</li>
+  <li>点「加载已解压的扩展程序」，选择安装目录下的 <code>extension</code> 文件夹（默认 <code>C:\Program Files\TaoDown\extension</code>）。</li>
+  <li>360 安全浏览器地址栏输入 <code>se://extensions</code>（社区教程确证）；360 极速浏览器输入 <code>chrome://extensions</code>，同样开「开发者模式」加载。</li>
+</ol>
+</div>
+
+<h2>哪些浏览器支持？</h2>
+<div class="card">
+<ul>
+  <li><strong>自动挂载</strong>：Chrome、Edge、Chromium、Brave、Vivaldi、Opera、Yandex（重启浏览器即挂载）。</li>
+  <li><strong>需手动加载一次</strong>：夸克、360 安全、360 极速（内核只认开发者模式）。</li>
+  <li><strong>暂不支持</strong>：Firefox（插件协议不同）。</li>
+</ul>
+</div>
+
+<h2>常见问题</h2>
+<div class="note">
+<p><strong>图标显示红色 !</strong>：宿主没连上。先确认 TaoDown 在运行，再重启浏览器重试；仍不行请把启动日志（<code>%LOCALAPPDATA%\TaoDown\logs\startup.log</code>）发给开发者。</p>
+<p><strong>blob: 开头的链接不接管</strong>：那是网页内部生成的临时地址，离开页面就失效，任何下载器都无法使用；浏览器会照常自己下载。</p>
+<p><strong>关闭「浏览器接管」</strong>：开关在 TaoDown 主程序设置页（v2.50 起扩展弹窗不再放开关，避免两处开关打架）。关掉后所有下载立即恢复浏览器默认行为，无需重启浏览器；重新打开同理。</p>
+</div>
+</body>
+</html>

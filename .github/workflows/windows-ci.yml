@@ -1,0 +1,162 @@
+name: windows-ci
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 还原依赖
+        run: dotnet restore src/TaoDown.App/TaoDown.App.csproj
+
+      - name: 核心单元测试
+        run: dotnet test src/TaoDown.Core.Tests/TaoDown.Core.Tests.csproj -c Release --nologo -v q
+
+      - name: 云端 Windows 编译（Release x64 自包含）
+        run: >
+          dotnet publish src/TaoDown.App/TaoDown.App.csproj -c Release -r win-x64
+          --self-contained true -p:WindowsAppSDKSelfContained=true -p:Platform=x64
+
+      - name: 定位发布目录
+        shell: pwsh
+        run: |
+          $pub = Get-ChildItem -Directory -Recurse -Path src/TaoDown.App/bin/x64/Release |
+                 Where-Object { $_.Name -eq 'publish' -and (Test-Path (Join-Path $_.FullName 'TaoDown.exe')) } |
+                 Select-Object -First 1
+          if (-not $pub) { throw "没找到含 TaoDown.exe 的 publish 目录" }
+          "PUBLISH_DIR=$($pub.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 打包 MSI（离线 WiX 自动安装 + 构建后自检）
+        shell: pwsh
+        run: ./tools/msi/package.ps1 -PublishDir "$env:PUBLISH_DIR" -OutDir out
+
+      - name: out 清单自检（应只有 1 个 msi）
+        shell: pwsh
+        run: |
+          $msis = Get-ChildItem out -Filter *.msi
+          if ($msis.Count -ne 1) { throw "out 里 msi 数量不对: $($msis.Count)" }
+          Write-Host "MSI SHA256: $((Get-FileHash $msis[0].FullName -Algorithm SHA256).Hash)"
+
+      - name: 真实用户视角（静默安装→启动→稳定运行→截图）
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          function Snap($path) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          function Find-AppExe {
+            $regKey = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.DisplayName -like "*TaoDown*" } | Select-Object -First 1
+            if ($regKey -and $regKey.InstallLocation -and (Test-Path (Join-Path $regKey.InstallLocation "TaoDown.exe"))) {
+              return (Join-Path $regKey.InstallLocation "TaoDown.exe")
+            }
+            foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
+              $cand = Join-Path $d "Program Files\TaoDown\TaoDown.exe"
+              if (Test-Path $cand) { return $cand }
+            }
+            foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
+              $pf = Join-Path $d "Program Files"
+              if (Test-Path $pf) {
+                $hit = Get-ChildItem $pf -Recurse -Depth 3 -Filter TaoDown.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { return $hit.FullName }
+              }
+            }
+            return $null
+          }
+          $msi = (Resolve-Path out/*.msi).Path
+          $p = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart","/l*v","evidence\install.log" -Wait -PassThru
+          Write-Host "msiexec 退出码: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "静默安装失败，退出码 $($p.ExitCode)" }
+          $appExe = Find-AppExe
+          if (-not $appExe) { throw "安装后所有常规盘符都找不到 TaoDown.exe" }
+          Write-Host "安装位置: $appExe"
+          Start-Process $appExe
+          Start-Sleep -Seconds 15
+          if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "启动后进程不在运行" }
+          Snap "evidence\user-launch-1.png"
+          Start-Sleep -Seconds 10
+          if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "10 秒后进程退出（稳定性不过）" }
+          Snap "evidence\user-launch-2.png"
+          Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Write-Host "真实用户视角：静默安装、启动、稳定运行均通过"
+
+      - name: 恶意攻击者视角（异常输入/路径穿越/崩溃监测）
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          function Snap($path) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          function Find-AppExe2 {
+            $regKey = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.DisplayName -like "*TaoDown*" } | Select-Object -First 1
+            if ($regKey -and $regKey.InstallLocation -and (Test-Path (Join-Path $regKey.InstallLocation "TaoDown.exe"))) {
+              return (Join-Path $regKey.InstallLocation "TaoDown.exe")
+            }
+            foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
+              $cand = Join-Path $d "Program Files\TaoDown\TaoDown.exe"
+              if (Test-Path $cand) { return $cand }
+            }
+            foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free }).Root) {
+              $pf = Join-Path $d "Program Files"
+              if (Test-Path $pf) {
+                $hit = Get-ChildItem $pf -Recurse -Depth 3 -Filter TaoDown.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { return $hit.FullName }
+              }
+            }
+            return $null
+          }
+          $appExe = Find-AppExe2
+          if (-not $appExe) { throw "攻击视角找不到已安装的 TaoDown.exe" }
+          Write-Host "攻击视角安装位置: $appExe"
+          $werBefore = @(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\WER" -Recurse -ErrorAction SilentlyContinue | Where-Object Name -like "*TaoDown*").Count
+          Start-Process $appExe -ArgumentList "--attack=$('A'*4096)"
+          Start-Sleep -Seconds 12
+          Snap "evidence\attacker-longarg.png"
+          Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          Start-Process $appExe -ArgumentList "--config=..\..\..\..\Windows\System32\drivers\etc\hosts"
+          Start-Sleep -Seconds 12
+          Snap "evidence\attacker-traversal.png"
+          Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          $werAfter = @(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\WER" -Recurse -ErrorAction SilentlyContinue | Where-Object Name -like "*TaoDown*").Count
+          Write-Host "TaoDown 相关 WER 崩溃记录: 前=$werBefore 后=$werAfter"
+          if ($werAfter -gt $werBefore) { throw "出现新的 TaoDown 崩溃报告，攻击者视角不过" }
+          Write-Host "恶意攻击者视角：异常输入与路径穿越未引发崩溃，通过"
+
+      - name: 上传测试证据与安装包
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multiview-evidence
+          path: |
+            evidence/**
+            out/*.msi
+          retention-days: 14

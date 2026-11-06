@@ -1,0 +1,8 @@
+bin/
+obj/
+out/
+artifacts/
+*.zip
+*.msi
+evidence/
+ui-evidence/

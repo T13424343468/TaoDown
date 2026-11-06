@@ -1,0 +1,25 @@
+﻿TaoDown 第三方组件声明 (Third-Party Notices)
+=============================================
+
+TaoDown 本体程序版权归你所有, 以下第三方组件随包分发, 各自遵循其开源许可。
+
+1. aria2-next (下载引擎, engine\aria2-next.exe)
+   - 来源: https://github.com/AnInsomniacy/aria2-next (v3.0.9)
+   - 许可: GNU General Public License v2.0 (GPL-2.0), 随包附完整许可文本
+     LICENSE-aria2-next.txt
+   - 说明: aria2 的活跃分支, 原生支持 HTTP(S)/FTP/SFTP/BT/磁力/Metalink,
+     并新增 ED2K(eD2k/电驴) 与 thunder 链接支持, JSON-RPC 与原版兼容。
+   - 以独立进程方式随 TaoDown 运行与分发; 如需源码可从上述地址获取。
+
+2. .NET 8 运行时与 Windows App SDK
+   - .NET Runtime / Windows App Runtime 随自包含发布一并分发,
+     各自遵循微软相应许可 (见随包 MICROSOFT 软件许可文件)。
+
+3. WixToolset (WiX 6.0.2, 打包用, tools\msi\wix\)
+   - 来源: https://github.com/wixtoolset/wix
+   - 许可: MS-RL (Reciprocal Public License), 仅用于构建本产品安装器。
+
+合规说明
+--------
+- TaoDown 不接入迅雷 P2SP 私有加速网络, 不做任何限速规避。
+- 上述组件均为独立进程/独立目录分发, 满足各自许可的再分发要求。

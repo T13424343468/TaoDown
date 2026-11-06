@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 本地界面代码语法验证: 用类型桩编译全部界面 code-behind, 抓 C# 级错误 (不含 XAML 编译) -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputPath>bin-check</OutputPath>
+    <NoWarn>CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS0649;CS0169;CS1998;CS4014;CS0067</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\TaoDown.App\MainWindow.xaml.cs" Link="MainWindow.xaml.cs" />
+    <Compile Include="..\..\src\TaoDown.App\Pages\DownloadsPage.xaml.cs" Link="DownloadsPage.xaml.cs" />
+    <Compile Include="..\..\src\TaoDown.App\Pages\SettingsPage.xaml.cs" Link="SettingsPage.xaml.cs" />
+    <Compile Include="..\..\src\TaoDown.App\BrowserInboxWatcher.cs" Link="BrowserInboxWatcher.cs" />
+    <Compile Include="..\..\src\TaoDown.App\StartupLog.cs" Link="StartupLog.cs" />
+    <Compile Include="..\..\src\TaoDown.App\BrowserGuide.cs" Link="BrowserGuide.cs" />
+    <Compile Include="..\..\src\TaoDown.App\ThemeService.cs" Link="ThemeService.cs" />
+    <Compile Include="..\..\src\TaoDown.App\TrayIcon.cs" Link="TrayIcon.cs" />
+    <Compile Include="..\..\src\TaoDown.App\NativeHostRegistrar.cs" Link="NativeHostRegistrar.cs" />
+    <Compile Include="..\..\src\TaoDown.App\AskWindow.cs" Link="AskWindow.cs" />
+    <Compile Include="..\..\src\TaoDown.App\GuideWindow.cs" Link="GuideWindow.cs" />
+    <Compile Include="..\..\src\TaoDown.App\BuildInfo.cs" Link="BuildInfo.cs" />
+    <Compile Include="..\..\src\TaoDown.App\WindowPlacement.cs" Link="WindowPlacement.cs" />
+    <ProjectReference Include="..\..\src\TaoDown.Core\TaoDown.Core.csproj" />
+    <ProjectReference Include="..\..\src\TaoDown.Engine\TaoDown.Engine.csproj" />
+  </ItemGroup>
+</Project>

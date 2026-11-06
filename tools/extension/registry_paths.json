@@ -1,0 +1,28 @@
+﻿{
+  "_comment": "本地插件外链登记键（唯一来源）。BrowserCatalog.LocalExtensionRegistryPaths 由 ChromiumFamilies 推导生成同套键组；BrowserCatalogTests 断言本文件与 C# 推导一致（v2.50）。MSI 打包读取本文件生成安装期机器级登记（卸载随组件自动清除）。",
+  "extension_id": "dchnmdakoleaofgpkhddhmohcoomlimp",
+  "crx_file": "taodown.crx",
+  "paths": [
+    "Software\\Google\\Chrome\\Extensions",
+    "Software\\Microsoft\\Edge\\Extensions",
+    "Software\\Chromium\\Extensions",
+    "Software\\BraveSoftware\\Brave\\Extensions",
+    "Software\\BraveSoftware\\Brave-Browser\\Extensions",
+    "Software\\Vivaldi\\Extensions",
+    "Software\\Opera Software\\Extensions",
+    "Software\\Yandex\\YandexBrowser\\Extensions",
+    "Software\\YandexBrowser\\Extensions",
+    "Software\\Quark\\Extensions",
+    "Software\\Quark\\Quark\\Extensions",
+    "Software\\UC\\Quark\\Extensions",
+    "Software\\QuarkBrowser\\Extensions",
+    "Software\\360Chrome\\Chrome\\Extensions",
+    "Software\\360ChromeX\\Chrome\\Extensions",
+    "Software\\360SE\\Chrome\\Extensions",
+    "Software\\360se6\\Chrome\\Extensions"
+  ],
+  "wow_paths_64bit_windows": [
+    "Software\\Wow6432Node\\Google\\Chrome\\Extensions",
+    "Software\\Wow6432Node\\Microsoft\\Edge\\Extensions"
+  ]
+}
