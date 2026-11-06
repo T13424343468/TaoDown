@@ -56,7 +56,7 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProfileDir) 
   Write-Host ("  {0} 版本: {1}" -f $Browser, (Get-Item $Exe).VersionInfo.ProductVersion)
   $marker = Join-Path $ProfileDir 'mounted.flag'
   Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","about:blank"
+  Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","--enable-logging","--v=1","about:blank"
   $found = $null
   for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep -Seconds 2
@@ -81,6 +81,23 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProfileDir) 
   return $found
 }
 
+# 失败诊断：逐项 dump 资料里的扩展详情（ID/path/state/location），谁在资料里一目了然
+function Dump-ProfileExtensions([string]$ProfileDir, [string]$Label) {
+  Write-Host "  === 扩展详情 dump（$Label） ==="
+  foreach ($file in @('Secure Preferences','Preferences')) {
+    $pf = Join-Path $ProfileDir "Default\$file"
+    if (-not (Test-Path $pf)) { continue }
+    try { $json = Get-Content $pf -Raw | ConvertFrom-Json -ErrorAction Stop } catch { Write-Host "  $pf 解析失败"; continue }
+    $settings = $json.extensions.settings
+    if (-not $settings) { continue }
+    foreach ($prop in $settings.PSObject.Properties) {
+      $v = $prop.Value
+      $mpath = $v.path; if (-not $mpath) { $mpath = ($v.manifest | ForEach-Object { $_ }) ; if ($v.manifest) { $mpath = '' } }
+      Write-Host ("  [{0}] {1} path={2} state={3} location={4} name={5}" -f $file, $prop.Name, $v.path, $v.state, $v.location, $v.manifest.name)
+    }
+  }
+}
+
 Write-Host '=== 自动挂载·真挂载核验（Edge） ==='
 $edge = Get-ChildItem 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe','C:\Program Files\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $edge) { throw 'runner 上没找到 Edge，真挂载核验无法进行' }
@@ -94,7 +111,8 @@ function Snap($path) {
   $g.Dispose(); $bmp.Dispose()
 }
 Snap 'evidence\mount-edge-before.png'
-$hit = Test-BrowserMount -Browser 'Edge' -Exe $edge.FullName -ProfileDir (Join-Path $PWD 'evidence\edge-profile')
+$edgeProfile = Join-Path $PWD 'evidence\edge-profile'
+$hit = Test-BrowserMount -Browser 'Edge' -Exe $edge.FullName -ProfileDir $edgeProfile
 if (-not $hit) {
   Write-Host '  === 诊断补充 ==='
   foreach ($hiveName in @('CurrentUser','LocalMachine')) {
@@ -103,6 +121,20 @@ if (-not $hit) {
       if ($k) { Write-Host ("  {0} {1}: path={2}" -f $hiveName, $root, $k.GetValue('path')) }
     }
   }
+  # Edge 策略：是否有 blocklist / external 相关限制
+  Write-Host '  === Edge 策略注册表 ==='
+  foreach ($pol in @('HKLM:\SOFTWARE\Policies\Microsoft\Edge','HKCU:\SOFTWARE\Policies\Microsoft\Edge')) {
+    if (Test-Path $pol) {
+      Get-ChildItem $pol -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  策略键: $($_.Name)" }
+      Get-ItemProperty $pol -ErrorAction SilentlyContinue | Select-Object * -ExcludeProperty PS* | Format-List | Out-String | ForEach-Object { Write-Host $_ }
+    } else { Write-Host "  无 $pol" }
+  }
+  Dump-ProfileExtensions $edgeProfile '自定义资料'
+  $dbg = Join-Path $edgeProfile 'chrome_debug.log'
+  if (Test-Path $dbg) {
+    Write-Host '  === Edge chrome_debug.log 关键行 ==='
+    Get-Content $dbg -ErrorAction SilentlyContinue | Where-Object { $_ -match 'extension|Extension|external|External|registry|Registry' -and $_ -notmatch 'OnLoaded|Already' } | Select-Object -Last 150 | ForEach-Object { Write-Host "  $_" }
+  } else { Write-Host "  无 chrome_debug.log: $dbg" }
   $sysDefault = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
   if (Test-Path $sysDefault) {
     foreach ($prof in (Get-ChildItem $sysDefault -Directory -ErrorAction SilentlyContinue)) {
