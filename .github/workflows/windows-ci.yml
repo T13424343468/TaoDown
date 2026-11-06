@@ -100,6 +100,10 @@ jobs:
           Start-Sleep -Seconds 2
           Write-Host "真实用户视角：静默安装、启动、稳定运行均通过"
 
+      - name: 自动挂载全链验证（登记键核验+Edge 真挂载）
+        shell: pwsh
+        run: ./tools/verify_mount.ps1
+
       - name: 恶意攻击者视角（异常输入/路径穿越/崩溃监测）
         shell: pwsh
         run: |
