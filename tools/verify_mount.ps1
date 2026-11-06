@@ -66,12 +66,12 @@ function Snap($path) {
   $g.Dispose(); $bmp.Dispose()
 }
 
-function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir) {
+function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir, [int]$Rounds = 45) {
   Write-Host ("  {0} 版本: {1}" -f $Browser, (Get-Item $Exe).VersionInfo.ProductVersion)
   Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
   Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","--enable-logging","--v=1","about:blank"
   $found = $null
-  for ($i = 0; $i -lt 45; $i++) {
+  for ($i = 0; $i -lt $Rounds; $i++) {
     Start-Sleep -Seconds 2
     foreach ($file in @('Secure Preferences','Preferences')) {
       $pf = Join-Path $ProfileDir "Default\$file"
@@ -84,6 +84,33 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [s
       $prop = $settings.PSObject.Properties | Where-Object { $_.Name -eq $Id }
       if ($prop) {
         $found = [ordered]@{ browser = $Browser; file = $file; path = $prop.Value.path; state = $prop.Value.state; location = $prop.Value.location }
+        break
+      }
+    }
+    if ($found) { break }
+  }
+  Get-Process $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  return $found
+}
+
+# 手动加载实测（内核不认登记挂载时走这条路）：--load-extension 解包扩展目录，验证插件本体在该内核真实可载
+function Test-BrowserManualLoad([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir, [string]$ExtDir) {
+  Write-Host ("  {0} 手动加载实测：--load-extension {1}" -f $Browser, $ExtDir)
+  Remove-Item $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
+  Start-Process $Exe -ArgumentList "--no-first-run","--user-data-dir=`"$ProfileDir`"","--load-extension=`"$ExtDir`"","about:blank"
+  $found = $null
+  for ($i = 0; $i -lt 45; $i++) {
+    Start-Sleep -Seconds 2
+    foreach ($file in @('Secure Preferences','Preferences')) {
+      $pf = Join-Path $ProfileDir "Default\$file"
+      if (-not (Test-Path $pf)) { continue }
+      try { $json = Get-Content $pf -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+      $settings = $json.extensions.settings
+      if (-not $settings) { continue }
+      $prop = $settings.PSObject.Properties | Where-Object { $_.Name -eq $Id }
+      if ($prop) {
+        $found = [ordered]@{ browser = $Browser; mode = 'manual-load'; file = $file; path = $prop.Value.path; state = $prop.Value.state }
         break
       }
     }
@@ -117,8 +144,8 @@ $Browsers = @(
   @{ Name='Chromium'; Proc='chrome';  ExeFile='chrome.exe';  Choco='chromium';        Winget='Hibbiki.Chromium';    Exes=@('C:\Program Files\Chromium\Application\chrome.exe') },
   @{ Name='Brave';    Proc='brave';   ExeFile='brave.exe';   Choco='brave';           Winget='BraveSoftware.BraveBrowser'; Exes=@('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe','C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe') },
   @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';         Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") },
-  @{ Name='Opera';    Proc='opera';   ExeFile='opera.exe';   Choco='opera';           Winget='Opera.Opera';         Exes=@('C:\Program Files\Opera\opera.exe',"$env:LOCALAPPDATA\Programs\Opera\opera.exe") },
-  @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco='yandex';          Winget='Yandex.YandexBrowser'; Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
+  @{ Name='Opera';    Proc='opera';   ExeFile='opera.exe';   Choco='opera';           Winget='Opera.Opera';         Rounds=90; ManualExt=$true; Exes=@('C:\Program Files\Opera\opera.exe',"$env:LOCALAPPDATA\Programs\Opera\opera.exe") },
+  @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco=$null;             Winget='Yandex.Browser';      Rounds=45; ManualExt=$false; Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
 )
 
 function Get-BrowserExe($spec) {
@@ -132,10 +159,13 @@ function Get-BrowserExe($spec) {
 }
 
 function Install-Browser($spec) {
-  Write-Host ("  {0} 不在 runner 上，现场安装：choco install {1}" -f $spec.Name, $spec.Choco)
-  choco install $spec.Choco -y --no-progress 2>&1 | ForEach-Object { Write-Host "  choco: $_" }
-  if ($LASTEXITCODE -in 0,1641,3010) { Write-Host '  choco 安装完成'; return $true }
-  Write-Host "  choco 退出码 $LASTEXITCODE"
+  if (-not $spec.Choco -and -not $spec.Winget) { return $false }
+  if ($spec.Choco) {
+    Write-Host ("  {0} 不在 runner 上，现场安装：choco install {1}" -f $spec.Name, $spec.Choco)
+    choco install $spec.Choco -y --no-progress 2>&1 | ForEach-Object { Write-Host "  choco: $_" }
+    if ($LASTEXITCODE -in 0,1641,3010) { Write-Host '  choco 安装完成'; return $true }
+    Write-Host "  choco 退出码 $LASTEXITCODE"
+  }
   if ($spec.Winget) {
     Write-Host ("  winget 兜底: {0}" -f $spec.Winget)
     winget install --id $spec.Winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | ForEach-Object { Write-Host "  winget: $_" }
@@ -158,11 +188,27 @@ foreach ($spec in $Browsers) {
   }
   Snap ("evidence\mount-{0}-before.png" -f $spec.Name.ToLower())
   $prof = Join-Path $PWD ("evidence\{0}-profile" -f $spec.Name.ToLower())
-  $hit = Test-BrowserMount -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof
+  $rounds = if ($spec.Rounds) { [int]$spec.Rounds } else { 45 }
+  $hit = Test-BrowserMount -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof -Rounds $rounds
   Snap ("evidence\mount-{0}-after.png" -f $spec.Name.ToLower())
   if (-not $hit) {
     Write-Host ("  {0} 插件未进用户资料，诊断补充 ===" -f $spec.Name)
     Dump-ProfileExtensions $prof $spec.Name
+    # 内核不认登记挂载时的手动加载实测（当前仅 Opera 需要此兜底）
+    if ($spec.ManualExt) {
+      $extDir = Join-Path $PSScriptRoot '..\src\extension'
+      if (Test-Path (Join-Path $extDir 'manifest.json')) {
+        Write-Host ("  {0} 登记 90*2 秒未自动挂载，转手动加载实测" -f $spec.Name)
+        $hit = Test-BrowserManualLoad -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof -ExtDir $extDir
+        Snap ("evidence\mount-{0}-manual.png" -f $spec.Name.ToLower())
+        if ($hit) {
+          Write-Host ("  {0} 手动加载实测通过：path={1} state={2}（内核不认登记挂载，归入手动加载内核组，回灌文档）" -f $spec.Name, $hit.path, $hit.state)
+          $report.mounts[$spec.Name] = $hit
+          continue
+        }
+        Write-Host ("  {0} 手动加载实测也未通过" -f $spec.Name)
+      } else { Write-Host '  仓库内解包扩展目录不存在，手动加载实测无法进行' }
+    }
     $dbg = Join-Path $prof 'chrome_debug.log'
     if (Test-Path $dbg) {
       Write-Host ("  === {0} chrome_debug.log 关键行 ===" -f $spec.Name)
