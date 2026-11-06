@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>TaoDown.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <!-- 自包含发布：随包内置 Windows App SDK 运行时，用户机器无需单独安装运行时 -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Version>2.3.0</Version>
+    <FileVersion>2.3.0.0</FileVersion>
+    <AssemblyVersion>2.3.0.0</AssemblyVersion>
+    <AssemblyName>TaoDown</AssemblyName>
+    <ApplicationIcon>Assets\taodown.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="Assets\taodown.ico" CopyToOutputDirectory="PreserveNewest" Link="TaoDown.ico" />
+    <!-- 浏览器插件随软件安装：安装目录 extension\ 下可直接“加载已解压”或上架商店用 -->
+    <None Include="..\extension\**\*.*" CopyToOutputDirectory="PreserveNewest" Link="extension\%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- 引擎组件并入发布内容, 与应用同目录打包, 避免安装内容遗漏 -->
+    <!-- 引擎文件按存在性引用：被杀毒软件误隔离时编译不中断，由 build.bat 第 4/6 步显式校验并给出提示 -->
+    <None Include="..\..\tools\vendor\aria2-next\aria2-next.exe" Condition="Exists('..\..\tools\vendor\aria2-next\aria2-next.exe')" CopyToOutputDirectory="PreserveNewest" Link="engine\aria2-next.exe" />
+    <None Include="..\..\tools\vendor\aria2\aria2c.exe" Condition="Exists('..\..\tools\vendor\aria2\aria2c.exe')" CopyToOutputDirectory="PreserveNewest" Link="engine\aria2c.exe" />
+    <None Include="..\..\tools\vendor\openlist\openlist.exe" Condition="Exists('..\..\tools\vendor\openlist\openlist.exe')" CopyToOutputDirectory="PreserveNewest" Link="openlist\openlist.exe" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TaoDown.Core\TaoDown.Core.csproj" />
+    <ProjectReference Include="..\TaoDown.Engine\TaoDown.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

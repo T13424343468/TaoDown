@@ -1,0 +1,143 @@
+﻿<Page
+    x:Class="TaoDown.App.DownloadsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:TaoDown.App"
+    NavigationCacheMode="Disabled">
+
+    <Grid x:Name="Root"
+          Background="{ThemeResource LayerFillColorDefaultBrush}" RowSpacing="8" Padding="16"
+          AllowDrop="True" DragOver="OnRootDragOver" Drop="OnRootDrop">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!--  顶部：链接输入 + 添加  -->
+        <Grid Grid.Row="0" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="LinkBox" Grid.Column="0" PlaceholderText="粘贴下载链接：HTTP / FTP / 磁力 / 电骡 / 迅雷" />
+            <Button x:Name="AddButton" Grid.Column="1" Content="添加下载" Click="OnAddDownload" />
+            <Button x:Name="TorrentButton" Grid.Column="2" Content="种子文件…" Click="OnPickTorrent" />
+        </Grid>
+
+        <!--  汇总 + 批量操作：汇总在左一眼可见，操作靠右，筛选项最右  -->
+        <Grid Grid.Row="1" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="SummaryText" Grid.Column="0" Text="" Opacity="0.85"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <Button x:Name="PauseAllButton" Grid.Column="1" Content="全部暂停" Click="OnPauseAll" />
+            <Button x:Name="ResumeAllButton" Grid.Column="2" Content="全部继续" Click="OnResumeAll" />
+            <Button x:Name="ClearButton" Grid.Column="3" Content="清理已完成" Click="OnClearFinished" />
+            <ComboBox x:Name="FilterBox" Grid.Column="4" MinWidth="110" SelectedIndex="0" SelectionChanged="OnFilterChanged">
+                <ComboBoxItem Content="全部" />
+                <ComboBoxItem Content="进行中" />
+                <ComboBoxItem Content="已完成" />
+            </ComboBox>
+        </Grid>
+
+        <!--  中部：任务列表（三行卡片：标题/进度/信息+操作）  -->
+        <TextBlock x:Name="EmptyHint" Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                   TextAlignment="Center" Opacity="0.6"
+                   Text="还没有下载任务。&#x0A;把链接粘贴到上面点「添加下载」，或把浏览器里的下载接手过来。"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <ListView x:Name="TaskList" Grid.Row="2" SelectionMode="Extended" DoubleTapped="OnTaskDoubleTapped">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="local:TaskRow">
+                    <Grid Padding="12,8" RowSpacing="6" Background="Transparent"
+                          RightTapped="OnRowRightTapped">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!--  行1：状态徽章 + 文件名 + 百分比  -->
+                        <Grid Grid.Row="0" ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{x:Bind StatusText, Mode=OneWay}"
+                                       Foreground="{x:Bind StatusBrush, Mode=OneWay}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Margin="0,0,2,0" />
+                            <TextBlock Grid.Column="1" Text="{x:Bind Name, Mode=OneWay}"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Text="{x:Bind PercentText, Mode=OneWay}"
+                                       FontSize="12" Opacity="0.85" VerticalAlignment="Center"
+                                       MinWidth="44" TextAlignment="Right" />
+                        </Grid>
+
+                        <!--  行2：进度条  -->
+                        <ProgressBar Grid.Row="1" Value="{x:Bind Percent, Mode=OneWay}" Maximum="100" />
+
+                        <!--  行3：关键信息（左） + 行内操作（右）  -->
+                        <Grid Grid.Row="2" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{x:Bind InfoLine, Mode=OneWay}"
+                                       FontSize="12" Opacity="0.75" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="0">
+                                <Button Tag="{x:Bind Self}" Click="OnRowToggle" Background="Transparent" BorderThickness="0" Padding="4"
+                                        Visibility="{x:Bind ActionVisibility, Mode=OneWay}"
+                                        ToolTipService.ToolTip="{x:Bind ActionTip, Mode=OneWay}">
+                                    <FontIcon Glyph="{x:Bind ActionGlyph, Mode=OneWay}" FontSize="14" />
+                                </Button>
+                                <Button Tag="{x:Bind Self}" Click="OnRowFolder" Background="Transparent" BorderThickness="0" Padding="4"
+                                        ToolTipService.ToolTip="打开所在文件夹">
+                                    <FontIcon Glyph="&#xE8D5;" FontSize="14" />
+                                </Button>
+                                <Button Tag="{x:Bind Self}" Click="OnRowRemove" Background="Transparent" BorderThickness="0" Padding="4"
+                                        ToolTipService.ToolTip="删除任务（已下载文件保留）">
+                                    <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <!--  右键任务：常用操作直达  -->
+                        <Grid.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="打开所在文件夹" Click="OnMenuFolder">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE838;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="暂停 / 继续" Click="OnMenuToggle">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE769;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="删除任务" Click="OnMenuRemove">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE74D;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Grid.ContextFlyout>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!--  底部：当前操作反馈  -->
+        <TextBlock x:Name="PageStatus" Grid.Row="3" Text="" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+    </Grid>
+</Page>

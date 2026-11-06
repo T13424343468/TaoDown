@@ -1,0 +1,42 @@
+﻿{
+  "manifest_version": 3,
+  "name": "TaoDown 接管助手",
+  "description": "把浏览器下载转交给 TaoDown：点下载即弹出保存位置，支持右键「用 TaoDown 下载」，blob/data 网页内文件也能接。",
+  "version": "1.2.11",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2QZ9+88wjsFEwSmck4OB3j0mPN31Rxt2M5KG4F5IT5bXcTVNFq+VnpZecepXBrMctt3ClaQQwR6VdfZSbmS2AEjTpEabwZR7woO9sMyQWwzWPYor1A3Fdfd2TGWKf2GETzRJQLKV5Z9gY92s93Ny1a3uxho9ykL7lJDMP71/VhY+wGuyL1cNB640VVxGw/FKZRG2iF4h8yBDPuqEALx5zGbY1HpOdkFCoy1rwIbMTtEELt5NB6XYVOaashfSfQGhjxZWC85junkNSpOR5ZuslYTOoB0u59vVmsUKIE6m0US1TTFA32OVBV5ANPn7Y+wa7FJEjA1cs67DD8qNTA9DWQIDAQAB",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "contextMenus",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TaoDown 下载接管"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
