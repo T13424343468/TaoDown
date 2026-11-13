@@ -1,5 +1,6 @@
 ﻿using Microsoft.UI.Xaml;
-using Microsoft.Win32;
+using Microsoft.Win32;
+
 using TaoDown.Core;
 using TaoDown.Engine;
 
@@ -108,7 +109,10 @@ public partial class App : Application
                 ftpClient = null;
             }
 
-            Downloads = new Aria2DownloadService(primaryClient, ftpClient);
+            Downloads = new Aria2DownloadService(primaryClient, ftpClient, new DownloadTaskStore());
+            // 上次会话的任务列表接回来：未终态任务重新提交引擎续传（进度靠 .aria2 控制文件不丢）
+            var restoredTasks = await Downloads.RestorePendingAsync();
+            StartupLog.Write($"任务恢复：{restoredTasks} 个未完成任务已重新提交引擎");
             // 跟随系统代理（App 启动时读取；引擎重启不影响——代理按任务下发）。
             // 真机教训：系统代理/VPN 环境下浏览器走代理正常、程序直连被黑洞，任务永远停在连接中。
             var proxyAddress = SystemProxy.Parse(ReadSystemProxyServer());
