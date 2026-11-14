@@ -1151,7 +1151,15 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         Updated?.Invoke(this, task);
 
-        SaveSnapshot();
+        // v2.55：进度拍走后台节流写盘，终态（暂停/出错/完成）立即同步落盘
+        if (task.Status is DownloadStatus.Paused or DownloadStatus.Error or DownloadStatus.Complete)
+        {
+            SaveSnapshot();
+        }
+        else
+        {
+            RequestSnapshotSave();
+        }
 
         // 完成→回读文件头识别假文件（只校验一次）
 
@@ -1279,6 +1287,53 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         {
             // Store.Save 内部已自捕异常，这里再兜一层，绝不让快照打断下载
         }
+    }
+
+    private readonly object _saveDebounceGate = new();
+    private bool _saveDebounceQueued;
+
+    /// <summary>
+    /// v2.55 修复「下载页卡死、任务删不掉」：状态回写路径每 800ms 在界面线程同步写盘
+    /// （序列化+临时文件+File.Replace），下载高峰时界面整线程被磁盘拖死，删除/暂停全部无响应。
+    /// 进度快照改为后台节流合并写：500ms 防抖合并；进度本体有 .aria2 控制文件兜底，
+    /// 被杀进程最多丢几秒的列表进度数字，重启按实际文件恢复，任务不丢。
+    /// 终态（完成/出错/暂停/删除）仍走同步 SaveSnapshot，保证关键状态不悬空。
+    /// </summary>
+    private void RequestSnapshotSave()
+    {
+        if (_store is null)
+        {
+            return;
+        }
+
+        lock (_saveDebounceGate)
+        {
+            if (_saveDebounceQueued)
+            {
+                return;
+            }
+            _saveDebounceQueued = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(500).ConfigureAwait(false);
+                SaveSnapshot();
+            }
+            catch (Exception)
+            {
+                // 快照保存失败不追溯也不打断下载，下次状态变化再写
+            }
+            finally
+            {
+                lock (_saveDebounceGate)
+                {
+                    _saveDebounceQueued = false;
+                }
+            }
+        });
     }
 
     /// <summary>
