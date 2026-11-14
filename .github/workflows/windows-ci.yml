@@ -1,4 +1,4 @@
-name: windows-ci
+﻿name: windows-ci
 
 on:
   push:
@@ -244,6 +244,40 @@ jobs:
           }
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Write-Host "长稳浸泡 30 分钟通过，三张留证截图非空白"
+
+      - name: 下载高峰界面响应回归（v2.55 看门狗闸）
+        shell: pwsh
+        run: |
+          # 复现真机卡死场景：大文件下载进行中，界面必须保持响应（单拍刷新不超 1.5 秒）
+          $big = "$env:TEMP\big.bin"
+          if (-not (Test-Path $big) -or ((Get-Item $big).Length -lt 300MB)) {
+            $fs = [System.IO.File]::Create($big); $fs.SetLength(400MB); $fs.Close()
+          }
+          $srv = [System.Net.HttpListener]::new()
+          $srv.Prefixes.Add('http://127.0.0.1:18099/')
+          $srv.Start()
+          $job = Start-Job -ScriptBlock {
+            param($s)
+            while ($s.IsListening) {
+              $ctx = $s.GetContext()
+              $ctx.Response.ContentType = 'application/octet-stream'
+              $ctx.Response.ContentLength64 = 400MB
+              $buf = New-Object byte[] (1MB)
+              for ($i = 0; $i -lt 400; $i++) { $ctx.Response.OutputStream.Write($buf, 0, $buf.Length) }
+              $ctx.Response.OutputStream.Close()
+            }
+          } -ArgumentList $srv
+          Start-Process "D:\Program Files\TaoDown\TaoDown.exe" -ArgumentList '"http://127.0.0.1:18099/big.bin"'
+          Start-Sleep -Seconds 150
+          $log = Get-ChildItem "$env:USERPROFILE\TaoDownData\logs\startup.log","D:\TaoDownData\logs\startup.log" -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($log) {
+            $slow = Select-String -Path $log.FullName -Pattern '刷新单拍耗时异常' | Select-Object -Last 1
+            if ($slow) { throw "下载高峰界面响应不达标：$($slow.Line)" }
+          }
+          Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Stop-Job $job; Remove-Job $job -Force
+          Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
       - name: 上传测试证据与安装包
         if: always()
