@@ -269,7 +269,7 @@ jobs:
           } -ArgumentList $srv
           Start-Process "D:\Program Files\TaoDown\TaoDown.exe" -ArgumentList '"http://127.0.0.1:18099/big.bin"'
           Start-Sleep -Seconds 150
-          $log = Get-ChildItem "$env:USERPROFILE\TaoDownData\logs\startup.log","D:\TaoDownData\logs\startup.log" -ErrorAction SilentlyContinue |
+          $log = Get-ChildItem "D:\TaoDownData\TaoDown\logs\startup.log","$env:USERPROFILE\TaoDownData\TaoDown\logs\startup.log" -ErrorAction SilentlyContinue |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if ($log) {
             $slow = Select-String -Path $log.FullName -Pattern '刷新单拍耗时异常' | Select-Object -Last 1
