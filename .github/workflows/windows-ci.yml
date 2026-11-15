@@ -96,10 +96,12 @@ jobs:
           Start-Process $appExe
           Start-Sleep -Seconds 15
           if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "启动后进程不在运行" }
-          Snap "evidence\user-launch-1.png"
+          (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
+Snap "evidence\user-launch-1.png"
           Start-Sleep -Seconds 10
           if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "10 秒后进程退出（稳定性不过）" }
-          Snap "evidence\user-launch-2.png"
+          (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
+Snap "evidence\user-launch-2.png"
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 2
           Write-Host "真实用户视角：静默安装、启动、稳定运行均通过"
@@ -148,12 +150,14 @@ jobs:
           $werBefore = @(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\WER" -Recurse -ErrorAction SilentlyContinue | Where-Object Name -like "*TaoDown*").Count
           Start-Process $appExe -ArgumentList "--attack=$('A'*4096)"
           Start-Sleep -Seconds 12
-          Snap "evidence\attacker-longarg.png"
+          (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
+Snap "evidence\attacker-longarg.png"
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 3
           Start-Process $appExe -ArgumentList "--config=..\..\..\..\Windows\System32\drivers\etc\hosts"
           Start-Sleep -Seconds 12
-          Snap "evidence\attacker-traversal.png"
+          (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
+Snap "evidence\attacker-traversal.png"
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 3
           $werAfter = @(Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Windows\WER" -Recurse -ErrorAction SilentlyContinue | Where-Object Name -like "*TaoDown*").Count
@@ -188,7 +192,8 @@ jobs:
           $p3 = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart" -Wait -PassThru
           if ($p3.ExitCode -ne 0) { throw "重装失败，退出码 $($p3.ExitCode)" }
           Start-Sleep -Seconds 5
-          Snap "evidence\l8-reinstall.png"
+          (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
+Snap "evidence\l8-reinstall.png"
           Write-Host "升级与回滚路径：覆盖安装、静默卸载、重装均通过"
 
       - name: 长稳浸泡 30 分钟（自动班：定时/手动触发）
@@ -278,6 +283,11 @@ jobs:
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Stop-Job $job; Remove-Job $job -Force
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
+
+      - name: 真人模拟 24 用例云批（UIA 真界面驱动 + 真源 SHA 对账）
+        shell: pwsh
+        run: |
+          pwsh -File e2e/human_sim.ps1
 
       - name: 超大文件+满列表并发回归（32GB 断点续传 + 40 任务并发 + 崩溃恢复）
         shell: pwsh
