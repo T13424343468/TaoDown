@@ -261,7 +261,13 @@ jobs:
           $srv = [System.Net.HttpListener]::new()
           $srv.Prefixes.Add('http://127.0.0.1:18099/')
           $srv.Start()
-          $job = Start-Job -ScriptBlock {
+          # 修红（run 43728875969 归因）：Start-Job 跨进程传 HttpListener 活对象是死壳，源不回数据；
+          # 改同进程 Runspace，活对象直传（human_sim/bigfile 两脚本 v2 同口径）
+          $srcRs = [runspacefactory]::CreateRunspace()
+          $srcRs.Open()
+          $srcPs = [powershell]::Create()
+          $srcPs.Runspace = $srcRs
+          [void]$srcPs.AddScript({
             param($s)
             while ($s.IsListening) {
               $ctx = $s.GetContext()
@@ -271,7 +277,8 @@ jobs:
               for ($i = 0; $i -lt 400; $i++) { $ctx.Response.OutputStream.Write($buf, 0, $buf.Length) }
               $ctx.Response.OutputStream.Close()
             }
-          } -ArgumentList $srv
+          }).AddArgument($srv)
+          $srcHandle = $srcPs.BeginInvoke()
           Start-Process "D:\Program Files\TaoDown\TaoDown.exe" -ArgumentList '"http://127.0.0.1:18099/big.bin"'
           Start-Sleep -Seconds 150
           $log = Get-ChildItem "D:\TaoDownData\TaoDown\logs\startup.log","$env:USERPROFILE\TaoDownData\TaoDown\logs\startup.log" -ErrorAction SilentlyContinue |
@@ -281,7 +288,7 @@ jobs:
             if ($slow) { throw "下载高峰界面响应不达标：$($slow.Line)" }
           }
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Stop-Job $job; Remove-Job $job -Force
+          $srcPs.Stop(); $srcRs.Close()
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
       - name: 真人模拟 24 用例云批（UIA 真界面驱动 + 真源 SHA 对账）

@@ -60,7 +60,13 @@ $srv.Prefixes.Add("http://127.0.0.1:$port/")
 $srv.Start()
 $bigLen = [long]$BigFileSizeGB * 1GB
 $listLen = 512MB
-$job = Start-Job -ScriptBlock {
+# v2 修红：Start-Job 跨进程传 HttpListener 活对象会被反序列化成死壳，源不回数据；
+# 改同进程 Runspace，活对象直传（human_sim.ps1 v2 同口径）。
+$srcRs = [runspacefactory]::CreateRunspace()
+$srcRs.Open()
+$srcPs = [powershell]::Create()
+$srcPs.Runspace = $srcRs
+[void]$srcPs.AddScript({
     param($s, $bigLen, $listLen)
     $buf = New-Object byte[] (1MB)
     while ($s.IsListening) {
@@ -75,10 +81,11 @@ $job = Start-Job -ScriptBlock {
         }
         $ctx.Response.OutputStream.Close()
     }
-} -ArgumentList $srv, $bigLen, $listLen
+}).AddArgument($srv).AddArgument($bigLen).AddArgument($listLen)
+$srcHandle = $srcPs.BeginInvoke()
 
 $appExe = Find-AppExe
-if (-not $appExe) { Stop-Job $job; Remove-Job $job -Force; throw "找不到已安装的 TaoDown.exe" }
+if (-not $appExe) { try { $srcPs.Stop(); $srcRs.Close() } catch { }; throw "找不到已安装的 TaoDown.exe" }
 $dataRoot = Find-DataRoot
 $log = Join-Path $dataRoot "logs\startup.log"
 $evd = Join-Path $PSScriptRoot "..\evidence\bigfile"
@@ -146,6 +153,6 @@ try {
     Write-Host "全部通过：超大文件 32GB + 满列表 $ListCount 并发，证据落 $evd"
 } finally {
     Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue
+    try { if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }
     $srv.Stop()
 }
