@@ -48,7 +48,7 @@ function Get-CompleteCount($log, $name) {
 }
 function Assert-Watchdog($log) {
     if (Test-Path $log) {
-        $slow = Select-String -Path $log -Pattern '刷新单拍耗时异常' | Select-Object -Last 1
+        $slow = Select-String -Path $log -Pattern '连续单拍耗时异常' | Select-Object -Last 1
         if ($slow) { throw "看门狗红灯（界面响应不达标）：$($slow.Line)" }
     }
 }

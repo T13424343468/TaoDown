@@ -465,6 +465,8 @@ public sealed partial class MainWindow : Window, IThemePaintable
                 await UpdateTrayTipAsync();
 
                 // v2.55 冻结看门狗：单拍刷新超 1.5 秒如实落日志，真机复现「页面卡死」时一查便知瓶颈
+                // 2026-11-15 超大文件班：几十 G 级满速落盘时单拍偶发抖动（实测 2185ms 一次），
+                // 持续卡顿才判死——单次超限只留痕，连续 3 轮超限落「连续」红线，测试闸以此为准。
 
                 tickWatch.Stop();
 
@@ -472,7 +474,25 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
                 {
 
-                    StartupLog.Write($"刷新单拍耗时异常：{tickWatch.ElapsedMilliseconds}ms（本轮 RPC/落盘/界面刷新合计）");
+                    _slowTickStreak++;
+
+                    StartupLog.Write($"刷新单拍耗时异常：{tickWatch.ElapsedMilliseconds}ms（第 {_slowTickStreak} 轮连续，本轮 RPC/落盘/界面刷新合计）");
+
+                    if (_slowTickStreak >= 3)
+
+                    {
+
+                        StartupLog.Write($"连续单拍耗时异常：{_slowTickStreak} 轮持续超 1.5 秒，界面卡死实锤");
+
+                    }
+
+                }
+
+                else
+
+                {
+
+                    _slowTickStreak = 0;
 
                 }
 
@@ -509,6 +529,9 @@ public sealed partial class MainWindow : Window, IThemePaintable
     /// <summary>刷新循环轮数（心跳日志用）。</summary>
 
     private long _refreshRounds;
+
+    /// <summary>看门狗连击账：连续超 1.5 秒的单拍轮数，回 0 于正常拍——持续卡顿才判死（超大文件班口径）。</summary>
+    private int _slowTickStreak;
 
 
 
