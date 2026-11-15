@@ -126,6 +126,9 @@ public sealed class BrowserInboxWatcher : IDisposable
         }
     }
 
+    /// <summary>修红班 R3 P2-1：收件箱单条 JSON 读取上限（4MB）。</summary>
+    private const long InboxMaxJsonBytes = 4 * 1024 * 1024;
+
     private async Task HandleAsync(string path)
     {
         try
@@ -135,6 +138,15 @@ public sealed class BrowserInboxWatcher : IDisposable
                 return;
             }
 
+            // 修红班 R3 P2-1：单条收件箱 JSON 补 4MB 读上限——超限按无效文件弃置并留痕，
+            // 防异常宿主写巨量数据把主程序读爆内存。
+            var info = new FileInfo(path);
+            if (info.Length > InboxMaxJsonBytes)
+            {
+                StartupLog.Write($"收件箱条目超限（{info.Length} 字节 > {InboxMaxJsonBytes}），已弃置：{path}");
+                File.Delete(path);
+                return;
+            }
             var json = await File.ReadAllTextAsync(path);
             File.Delete(path);
             if (!BrowserRequest.TryParse(json, out var request, out var parseError) || request is null)
@@ -241,10 +253,25 @@ public sealed class BrowserInboxWatcher : IDisposable
 
         try
         {
+            // 修红班 R3 P1-1：接管入口与手贴入口同一把尺——迅雷/快车/旋风链接先本地解码
+            // 还原真实地址，解析失败如实报错，不再让 Kind=Thunder 落到引擎「暂不支持」分支。
+            var link = request.Url;
+            var kind = LinkClassifier.Classify(link);
+            if (kind == LinkKind.Thunder)
+            {
+                var resolved = ThunderLinkParser.Resolve(link);
+                if (resolved is null)
+                {
+                    StartupLog.Write("接管链接无法解析（迅雷/快车/旋风格式无效），已放弃：" + link);
+                    return;
+                }
+                link = resolved;
+                kind = LinkClassifier.Classify(link);
+            }
             var task = new DownloadTask
             {
-                Url = request.Url,
-                Kind = LinkClassifier.Classify(request.Url),
+                Url = link,
+                Kind = kind,
                 SaveDir = App.Settings.DownloadDir,
                 FileName = string.IsNullOrEmpty(request.Filename) ? null : request.Filename,
             };

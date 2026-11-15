@@ -343,6 +343,10 @@ $wxs = @"
 
     <MajorUpgrade DowngradeErrorMessage="已安装了更新版本的 TaoDown，如需重装请先在“应用”中卸载。" AllowSameVersionUpgrades="yes" />
 
+    <!-- 修红班 R3 P1-4：32 位 Windows 无交付覆盖（仅发布 win-x64），安装前置拦截并说明要求 -->
+    <Launch Condition="Installed OR VersionNT64"
+            Message="TaoDown 仅支持 64 位 Windows（本安装包不含 32 位版本）。请确认系统为 64 位后重新安装。" />
+
 
 
 

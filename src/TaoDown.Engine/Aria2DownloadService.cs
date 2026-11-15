@@ -257,6 +257,50 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     }
 
+    /// <summary>修红班 R3 P1-3：出错任务的一键重试。彻底断网后任务约 90 秒标错，
+
+    /// 此前无自动恢复也无重试入口，用户只能删了重下。重试按 60 秒频控（防止连环自动重试）；
+
+    /// 网络未恢复时重试仍会失败，如实报错，不承诺恢复时间。</summary>
+
+    public async Task RetryFromErrorAsync(string taskId, CancellationToken ct = default)
+
+    {
+
+        DownloadTask task;
+
+        lock (_gate)
+
+        {
+
+            if (!_tasks.TryGetValue(taskId, out task) || task.Status != DownloadStatus.Error)
+
+            {
+
+                throw new InvalidOperationException("任务不存在或当前状态不可重试。");
+
+            }
+
+            var now = Environment.TickCount64;
+
+            if (!RetryAllowed(now, _errorRetryTicks.TryGetValue(taskId, out var last) ? last : null, ErrorRetryCooldownMs))
+
+            {
+
+                throw new InvalidOperationException("重试过于频繁，请稍后再试（约 1 分钟一次）。");
+
+            }
+
+            _errorRetryTicks[taskId] = now;
+
+        }
+
+        RefreshDiag.Write($"手动重试出错任务（60 秒频控内放行一次）：{task.FileName ?? task.Url}");
+
+        await RestartFreshAsync(task, resume: true);
+
+    }
+
     /// <summary>暂停所有进行中的任务；逐个尝试，个别失败不影响其余。</summary>
 
     public async Task<int> PauseAllAsync(CancellationToken ct = default)
@@ -458,6 +502,8 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             _stallRestarts.Remove(taskId);
 
             _autoRestarted.Remove(taskId);
+
+            _errorRetryTicks.Remove(taskId);
 
             _contentChecked.Remove(taskId);
 
@@ -788,6 +834,10 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     private readonly object _saveDebounceGate = new();
     private bool _saveDebounceQueued;
+    /// <summary>修红班 R3 P0-1：快照节流窗口（毫秒）。活跃下载期间防抖被高频重触发，
+    /// 节流保证每个窗口内至少落盘一次，崩溃/强杀最多丢一个窗口的进度。</summary>
+    private const long SnapshotThrottleMs = 5000;
+    private long _lastSnapshotSaveTick = long.MinValue / 2;
     /// <summary>退出冲刷：同步落盘当前快照（修红班 R2 黄2，App.Shutdown 调用，失败不阻断退出）。</summary>
     public void ForceSnapshotSave()
     {
@@ -822,6 +872,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
     /// 进度快照改为后台节流合并写：500ms 防抖合并；进度本体有 .aria2 控制文件兜底，
     /// 被杀进程最多丢几秒的列表进度数字，重启按实际文件恢复，任务不丢。
     /// 终态（完成/出错/暂停/删除）仍走同步 SaveSnapshot，保证关键状态不悬空。
+    /// 修红班 R3 P0-1：防抖之外加 5 秒节流双闸——活跃下载期间 Updated 每秒重触发防抖，
+    /// 原实现 timer 永不到期，tasks.json 整个下载期间零落盘，崩溃/强杀后会话恢复为空；
+    /// 节流窗口（距上次成功落盘 5 秒）到点必写，防抖窗口内仍合并，高频不放大 IO。
     /// </summary>
     private void RequestSnapshotSave()
     {
@@ -831,7 +884,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         }
         lock (_saveDebounceGate)
         {
-            if (_saveDebounceQueued)
+            var now = Environment.TickCount64;
+            // 节流：距上次落盘不足 5 秒且已有防抖在途，不另起 timer（防抖到点会带上最新状态）
+            if (SnapshotThrottleRequired(_saveDebounceQueued, now, _lastSnapshotSaveTick, SnapshotThrottleMs))
             {
                 return;
             }
@@ -843,6 +898,10 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             {
                 await Task.Delay(500).ConfigureAwait(false);
                 SaveSnapshot();
+                lock (_saveDebounceGate)
+                {
+                    _lastSnapshotSaveTick = Environment.TickCount64;
+                }
             }
             catch (Exception)
             {
@@ -1002,6 +1061,12 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
     }
 
     private readonly HashSet<string> _autoRestarted = new();
+
+    /// <summary>修红班 R3 P1-3：错误任务手动重试的上次尝试时刻（Ticks=TickCount64 毫秒），60 秒频控。</summary>
+
+    private readonly Dictionary<string, long> _errorRetryTicks = new();
+
+    private const long ErrorRetryCooldownMs = 60_000;
 
     // ---- 停滞自愈（2026-11-03 真机反馈「下载中 45.6% 却永远不动，文件也没下完」）----
 
@@ -1377,6 +1442,32 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
     /// .json/.xml/.html/.svg 等文本类文件合法以 { 或 < 开头，不参与首字节否决。
     /// public static 供回归断言直接覆盖（对齐 BuildArguments 先例）。
     /// </summary>
+    /// <summary>修红班 R3 P0-1 回归口径：防抖在途且距上次落盘不足节流窗口时才延缓落盘。</summary>
+    public static bool SnapshotThrottleRequired(bool debounceQueued, long nowTick, long lastSaveTick, long throttleMs)
+    {
+        return debounceQueued && nowTick - lastSaveTick < throttleMs;
+    }
+
+    /// <summary>修红班 R3 P1-2 回归口径：下载文件内容校验的判定结论（空文件/假文件返回人话文案，正常返回 null）。</summary>
+    public static string? SuspiciousFileError(long fileLength, string head, string ext)
+    {
+        if (fileLength == 0)
+        {
+            return "下载到的文件是空的（服务器未给出真实文件）；建议删除本任务后重试。";
+        }
+        if (head.Length > 0 && IsSuspiciousHeader(ext, head))
+        {
+            return "服务器返回的是网页而不是文件（常见于限流或链接过期）；建议删除本任务后重新下载。";
+        }
+        return null;
+    }
+
+    /// <summary>修红班 R3 P1-3 回归口径：出错任务手动重试是否放行（60 秒频控，首次重试放行）。</summary>
+    public static bool RetryAllowed(long nowTick, long? lastRetryTick, long cooldownMs)
+    {
+        return lastRetryTick is null || nowTick - lastRetryTick.Value >= cooldownMs;
+    }
+
     public static bool IsSuspiciousHeader(string ext, string head)
 
     {
@@ -1405,6 +1496,12 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     {
 
+        // 修红班 R3 P1-2：本函数跑在线程池线程，原实现在锁外直接改写共享任务状态并触发 Updated，
+
+        // 与红2/红3 同型竞态。改为：锁内落账状态与错误文案，锁外再触发 Updated（快照先建，回调不进锁）。
+
+        string? errorText = null;
+
         try
 
         {
@@ -1418,42 +1515,15 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             }
 
             using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var buf = new byte[Math.Min(512, fs.Length)];
+        var read = fs.Read(buf, 0, buf.Length);
+        var head = System.Text.Encoding.UTF8.GetString(buf, 0, read).TrimStart();
 
-            if (fs.Length == 0)
-
-            {
-
-                task.Status = DownloadStatus.Error;
-
-                task.Error = "下载到的文件是空的（服务器未给出真实文件）；建议删除本任务后重试。";
-
-                Updated?.Invoke(this, task);
-
-                return;
-
-            }
-
-            var buf = new byte[Math.Min(512, fs.Length)];
-
-            var read = fs.Read(buf, 0, buf.Length);
-
-            var head = System.Text.Encoding.UTF8.GetString(buf, 0, read).TrimStart();
-
-            // 2026-11-15 修红班 R2 红1：假文件识别只在「扩展名与内容冲突」时判错——
-            // .json/.xml/.html/.svg 等文本类文件本身合法以 { 或 < 开头，不能按首字节一票否决（曾 100% 误杀 .json 下载）。
-            if (head.Length > 0 && IsSuspiciousHeader(Path.GetExtension(filePath), head))
-
-            {
-
-                task.Status = DownloadStatus.Error;
-
-                task.Error = "服务器返回的是网页而不是文件（常见于限流或链接过期）；建议删除本任务后重新下载。";
-
-                Updated?.Invoke(this, task);
-
-            }
-
-        }
+        // 2026-11-15 修红班 R2 红1：假文件识别只在「扩展名与内容冲突」时判错——
+        // .json/.xml/.html/.svg 等文本类文件本身合法以 { 或 < 开头，不能按首字节一票否决（曾 100% 误杀 .json 下载）。
+        // 修红班 R3 P1-2：判定结论收进纯函数（FixR3Tests 定向回归），本函数只负责文件读取与状态落账。
+        errorText = SuspiciousFileError(fs.Length, head, Path.GetExtension(filePath));
+    }
 
         catch (Exception)
 
@@ -1462,6 +1532,26 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             // 识别属于增强校验，任何失败都不影响任务本身
 
         }
+
+        if (errorText is null)
+
+        {
+
+            return;
+
+        }
+
+        lock (_gate)
+
+        {
+
+            task.Status = DownloadStatus.Error;
+
+            task.Error = errorText;
+
+        }
+
+        Updated?.Invoke(this, task);
 
     }
 
