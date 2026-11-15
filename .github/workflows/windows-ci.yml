@@ -279,6 +279,11 @@ jobs:
           Stop-Job $job; Remove-Job $job -Force
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
+      - name: 超大文件+满列表并发回归（32GB 断点续传 + 40 任务并发 + 崩溃恢复）
+        shell: pwsh
+        run: |
+          pwsh -File e2e/bigfile_regression.ps1 -BigFileSizeGB 32 -ListCount 40
+
       - name: 上传测试证据与安装包
         if: always()
         uses: actions/upload-artifact@v4
