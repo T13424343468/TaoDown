@@ -136,7 +136,7 @@ public class DownloadQueueTests
         var second = NewTask();
         await queue.EnqueueAsync(first);
         await queue.EnqueueAsync(second);
-        Assert.Equal(1, service.Added.Count); // 并发=1，第二个排队
+        Assert.Single(service.Added); // 并发=1，第二个排队
 
         await service.RemoveAsync(first.Id); // 删除活动任务 → 触发 Removed
 
@@ -152,8 +152,8 @@ public class DownloadQueueTests
         var only = NewTask();
         await queue.EnqueueAsync(only);
         await service.RemoveAsync("不存在的Id");
-        Assert.Equal(1, service.Added.Count);
-        Assert.Equal(0, queue.Waiting().Count);
+        Assert.Single(service.Added);
+        Assert.Empty(queue.Waiting());
     }
 
     [Fact]

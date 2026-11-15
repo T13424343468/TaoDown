@@ -41,6 +41,7 @@ public class QueueStressTests
                 task.Status = DownloadStatus.Active;
             }
 
+            Updated?.Invoke(this, task);
             return Task.FromResult(task.Id);
         }
 

@@ -32,7 +32,7 @@ public class ThemeDictionaryTests
                 .Where(s => s.Value.Contains("Offset=\"0.55\""))
                 .Select(s => Regex.Match(s.Value, "Color=\"(#[0-9A-Fa-f]{6,8})\""))
                 .FirstOrDefault(m2 => m2.Success);
-            if (main.Success)
+            if (main is not null && main.Success)
                 map[m.Groups[1].Value] = main.Groups[1].Value;
         }
         return map;

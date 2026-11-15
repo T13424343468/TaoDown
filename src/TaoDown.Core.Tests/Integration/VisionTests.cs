@@ -71,6 +71,7 @@ public class VisionTests
             .Where(s => s.Value.Contains("Offset=\"0.55\""))
             .Select(s => Regex.Match(s.Value, "Color=\"(#[0-9A-Fa-f]{6,8})\""))
             .FirstOrDefault(m2 => m2.Success);
+        Assert.NotNull(main);
         Assert.True(main.Success, $"渐变 {key} 缺 0.55 主体档");
         return main.Groups[1].Value;
     }
@@ -180,7 +181,7 @@ public class VisionTests
                 .Where(s => s.Value.Contains("Offset=\"0.55\""))
                 .Select(s => Regex.Match(s.Value, "Color=\"(#[0-9A-Fa-f]{6,8})\""))
                 .FirstOrDefault(m2 => m2.Success);
-            if (main.Success)
+            if (main is not null && main.Success)
             {
                 result.Add((m.Groups[1].Value, main.Groups[1].Value));
             }
