@@ -273,6 +273,8 @@ public partial class App : Application
             return;
         }
 
+        // 修红班 R2 黄2：退出前同步冲刷任务快照，最后状态变化不丢（防抖窗口内的进度落盘）。
+        try { Downloads?.ForceSnapshotSave(); } catch (Exception ex) { StartupLog.Write("任务快照冲刷失败", ex); }
         try { Inbox?.Dispose(); } catch (Exception ex) { StartupLog.Write("收件箱清理失败", ex); }
         try { FtpEngineHost?.Dispose(); } catch (Exception ex) { StartupLog.Write("FTP 引擎清理失败", ex); }
         try { EngineHost?.Dispose(); } catch (Exception ex) { StartupLog.Write("主引擎清理失败", ex); }

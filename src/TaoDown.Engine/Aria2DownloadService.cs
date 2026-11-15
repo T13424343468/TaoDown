@@ -1,12 +1,8 @@
-﻿using System.Text.Json;
+﻿﻿using System.Text.Json;
 
 using TaoDown.Core;
 
-
-
 namespace TaoDown.Engine;
-
-
 
 /// <summary>
 
@@ -34,17 +30,11 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     private readonly object _gate = new();
 
-
-
     public event EventHandler<DownloadTask>? Updated;
-
-
 
     /// <inheritdoc />
 
     public event EventHandler<string>? Removed;
-
-
 
     /// <summary>
 
@@ -58,8 +48,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     public string? AllProxy { get; set; }
 
-
-
     public Aria2DownloadService(Aria2Client client, Aria2Client? ftpClient = null, DownloadTaskStore? store = null)
 
     {
@@ -67,20 +55,15 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         _client = client;
 
         _ftpClient = ftpClient;
-
         _store = store;
 
     }
 
     private readonly DownloadTaskStore? _store;
 
-
-
     private int _mainFailStreak;
 
     private int _ftpFailStreak;
-
-
 
     /// <summary>主引擎连续 RPC 失败次数（任一成功即归零）；达到阈值由界面层触发自愈重启。</summary>
 
@@ -92,8 +75,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     }
 
-
-
     /// <summary>FTP 引擎连续 RPC 失败次数（任一成功即归零）。</summary>
 
     public int FtpRpcFailStreak
@@ -103,8 +84,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         get { lock (_gate) { return _ftpFailStreak; } }
 
     }
-
-
 
     public async Task<string> AddAsync(DownloadTask task, CancellationToken ct = default)
 
@@ -122,8 +101,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         var client = kind switch
 
         {
@@ -136,8 +113,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         };
 
-
-
         // 代理只跟 HTTP(S)/FTP 走：BT/ED2K 走代理反而拖累 DHT/节点发现
 
         if ((kind == LinkKind.Http || kind == LinkKind.Ftp) && !string.IsNullOrWhiteSpace(AllProxy))
@@ -147,8 +122,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             downloadOptions["all-proxy"] = AllProxy;
 
         }
-
-
 
         var gid = kind switch
 
@@ -166,8 +139,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         };
 
-
-
         task.EngineId = gid;
 
         task.Status = DownloadStatus.Active;
@@ -184,13 +155,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-        SaveSnapshot();
-
         return task.Id;
 
     }
-
-
 
     /// <summary>添加本地种子文件，返回任务 Id。</summary>
 
@@ -228,13 +195,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-        SaveSnapshot();
-
         return task.Id;
 
     }
-
-
 
     public async Task PauseAsync(string taskId, CancellationToken ct = default)
 
@@ -278,13 +241,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         MarkStatus(taskId, DownloadStatus.Paused);
 
     }
-
-
 
     public async Task ResumeAsync(string taskId, CancellationToken ct = default)
 
@@ -297,8 +256,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         MarkStatus(taskId, DownloadStatus.Active);
 
     }
-
-
 
     /// <summary>暂停所有进行中的任务；逐个尝试，个别失败不影响其余。</summary>
 
@@ -317,8 +274,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 t.EngineId is { } && t.Status is DownloadStatus.Waiting or DownloadStatus.Active)];
 
         }
-
-
 
         var done = 0;
 
@@ -346,13 +301,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         return done;
 
     }
-
-
 
     /// <summary>继续所有已暂停的任务；逐个尝试，个别失败不影响其余。</summary>
 
@@ -371,8 +322,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 t.EngineId is { } && t.Status == DownloadStatus.Paused)];
 
         }
-
-
 
         var done = 0;
 
@@ -400,13 +349,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         return done;
 
     }
-
-
 
     /// <summary>清理已完成与出错的任务（从列表移除，文件保留在磁盘）。</summary>
 
@@ -423,8 +368,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             targets = [.. _tasks.Values.Where(t => t.Status is DownloadStatus.Complete or DownloadStatus.Error)];
 
         }
-
-
 
         var removed = 0;
 
@@ -452,13 +395,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         return removed;
 
     }
-
-
 
     public async Task RemoveAsync(string taskId, CancellationToken ct = default)
 
@@ -502,8 +441,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         lock (_gate)
 
         {
@@ -514,17 +451,26 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
             _tasks.Remove(taskId);
 
-        }
+            // 2026-11-15 修红班 R2 黄6：自愈/校验集合随任务删除一并清理，防长会话缓慢累积。
 
-        SaveSnapshot();
+            _stallSince.Remove(taskId);
+
+            _stallRestarts.Remove(taskId);
+
+            _autoRestarted.Remove(taskId);
+
+            _contentChecked.Remove(taskId);
+
+            _diagPolled.Remove(taskId);
+
+        }
 
         // 通知队列释放并发名额，避免删除活动任务后名额永久占用
 
+        SaveSnapshot();
         Removed?.Invoke(this, taskId);
 
     }
-
-
 
     public Task<IReadOnlyList<DownloadTask>> ListAsync(CancellationToken ct = default)
 
@@ -541,8 +487,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         }
 
     }
-
-
 
     /// <summary>刷新所有活动任务的进度（由界面定时器调用）。</summary>
 
@@ -578,11 +522,7 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         RefreshDiag.Heartbeat(snapshot.Count);
-
-
 
         foreach (var (gid, task) in snapshot)
 
@@ -599,8 +539,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 continue;
 
             }
-
-
 
             var client = ResolveClient(gid);
 
@@ -632,8 +570,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 }
 
-
-
                 if (_diagPolled.Add(gid))
 
                 {
@@ -641,8 +577,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                     RefreshDiag.Write($"TellStatus 成功：{gid[..Math.Min(8, gid.Length)]}…，状态已交给界面");
 
                 }
-
-
 
                 ApplyStatus(task, status);
 
@@ -688,8 +622,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 }
 
-
-
                 // 真机黑匣子：首次失败与每第 20 次连续失败落原文，定位「页面不更新」卡在哪一环
 
                 var streak = ReferenceEquals(client, _client) ? _mainFailStreak : _ftpFailStreak;
@@ -708,19 +640,23 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     }
 
-
-
     /// <summary>
 
-    /// 主引擎自愈重启后替换客户端并重置映射（aria2 无会话恢复，引擎侧任务已随进程消失）：
+    /// 主引擎自愈重启后替换客户端并重置映射：
 
-    /// 未终态任务如实标记为出错并给出下一步指引，绝不留在旧状态里无声无息。
+    /// 审查 2026-11-14 红1 落地——未终态任务不再判死，改回等待态并经 NeedsResubmit 请求重新提交
+
+    /// （aria2 --continue 保文件断点，任务列表不丢）；由 App 侧队列接管重提。
 
     /// </summary>
 
     public void SwapPrimaryClient(Aria2Client client)
 
     {
+
+        // 2026-11-15 修红班 R2 红3：锁内只收集待通知快照，事件退出锁后再触发（锁内回调处理器链直达 App 线，潜在死锁）。
+
+        List<DownloadTask> toNotify;
 
         lock (_gate)
 
@@ -734,31 +670,43 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
             _mainFailStreak = 0;
 
-            foreach (var task in _tasks.Values.Where(t =>
+            toNotify = _tasks.Values.Where(t =>
 
-                t.Status is not (DownloadStatus.Complete or DownloadStatus.Error)).ToList())
+                t.Status is DownloadStatus.Active or DownloadStatus.Waiting or DownloadStatus.Paused).ToList();
+
+            foreach (var task in toNotify)
 
             {
 
-                task.Status = DownloadStatus.Error;
+                task.EngineId = null;
 
-                task.Error = "引擎已自动重启，本任务中断；请删除本任务后重新添加下载。";
-
-                Updated?.Invoke(this, task);
+                task.Status = DownloadStatus.Waiting;
 
             }
 
         }
 
+        foreach (var task in toNotify)
+
+        {
+
+            Updated?.Invoke(this, task);
+
+            NeedsResubmit?.Invoke(this, task);
+
+        }
+
     }
-
-
 
     /// <summary>FTP 引擎自愈重启后替换客户端；只重置 FTP 引擎的任务映射，主引擎任务不受影响。</summary>
 
     public void SwapFtpClient(Aria2Client? client)
 
     {
+
+        // 2026-11-15 修红班 R2 红3：同 SwapPrimaryClient——锁内改状态收集快照，锁外再触发事件。
+
+        List<DownloadTask> toNotify;
 
         lock (_gate)
 
@@ -774,6 +722,8 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 .Select(kv => kv.Key).ToList();
 
+            toNotify = new List<DownloadTask>();
+
             foreach (var gid in deadGids)
 
             {
@@ -788,11 +738,13 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 {
 
-                    task.Status = DownloadStatus.Error;
+                    // 审查红1 同口径：引擎重启不判死，回等待态重提
 
-                    task.Error = "FTP 引擎已自动重启，本任务中断；请删除本任务后重新添加下载。";
+                    task.EngineId = null;
 
-                    Updated?.Invoke(this, task);
+                    task.Status = DownloadStatus.Waiting;
+
+                    toNotify.Add(task);
 
                 }
 
@@ -800,485 +752,60 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-    }
-
-
-
-    private Aria2Client ResolveClient(string gid)
-
-    {
-
-        lock (_gate)
+        foreach (var task in toNotify)
 
         {
-
-            return _gidToClient.TryGetValue(gid, out var client) ? client : _client;
-
-        }
-
-    }
-
-
-
-    private readonly HashSet<string> _autoRestarted = new();
-
-
-
-    // ---- 停滞自愈（2026-11-03 真机反馈「下载中 45.6% 却永远不动，文件也没下完」）----
-
-    // RPC 正常、引擎进程活着，个别连接挂死后任务一直停在「下载中」零速度。连续 30 秒零速度
-
-    // 的 HTTP/FTP 活动任务，自动换新号续传重下（进度不丢）；每任务最多 2 次，超限如实标错。
-
-    private const int StallRestartLimit = 2;
-
-    private readonly Dictionary<string, DateTime> _stallSince = new(); // taskId -> 首次零速时刻
-
-    private readonly Dictionary<string, int> _stallRestarts = new();   // taskId -> 已自动续传次数
-
-
-
-    private void DetectStall(DownloadTask task)
-
-    {
-
-        // 只盯 HTTP/FTP 下载中的零速任务：BT/磁力初期找种没速度是常态，不能误伤
-
-        var stalled = task.Status == DownloadStatus.Active && task.SpeedBytesPerSec <= 0 &&
-
-                      (task.Kind == LinkKind.Http || task.Kind == LinkKind.Ftp);
-
-        if (!stalled)
-
-        {
-
-            _stallSince.Remove(task.Id);
-
-            return;
-
-        }
-
-
-
-        var now = DateTime.UtcNow;
-
-        if (!_stallSince.TryGetValue(task.Id, out var since))
-
-        {
-
-            _stallSince[task.Id] = now;
-
-            return;
-
-        }
-
-
-
-        if ((now - since).TotalSeconds < 30)
-
-        {
-
-            return;
-
-        }
-
-
-
-        if (_stallRestarts.TryGetValue(task.Id, out var used) && used >= StallRestartLimit)
-
-        {
-
-            task.Status = DownloadStatus.Error;
-
-            task.Error = "下载停滞且自动续传多次未恢复；建议删除本任务后重新下载。";
 
             Updated?.Invoke(this, task);
 
-            return;
+            NeedsResubmit?.Invoke(this, task);
 
         }
 
-
-
-        _stallSince.Remove(task.Id);
-
-        _stallRestarts[task.Id] = used + 1;
-
-        RefreshDiag.Write($"下载停滞超过 30 秒，自动换号续传（第 {used + 1} 次）：{task.FileName ?? task.Url}");
-
-        _ = RestartFreshAsync(task, resume: true);
-
     }
 
+    /// <summary>引擎自愈重启后：未终态任务需重新提交（App 侧接 DownloadQueue.EnqueueAsync）。</summary>
 
+    public event EventHandler<DownloadTask>? NeedsResubmit;
 
-    /// <summary>续传被拒后的自动自愈：同一地址从头重下（覆盖旧文件），每任务至多一次，失败则回落为错误+人话指引。
+    /// <summary>当前任务快照（供持久化落盘）。</summary>
 
-    /// resume=true 时改为续传重下（进度不丢），用于「下载中却停滞不动」的任务级自愈。</summary>
-
-    private async Task RestartFreshAsync(DownloadTask task, bool resume = false)
+    public IReadOnlyList<DownloadTask> TasksSnapshot
 
     {
 
-        try
-
-        {
-
-            var oldGid = task.EngineId;
-
-            var client = oldGid is { } g ? ResolveClient(g) : _client;
-
-            var options = new Dictionary<string, string>
-
-            {
-
-                ["dir"] = task.SaveDir,
-
-                ["continue"] = resume ? "true" : "false",
-
-                ["allow-overwrite"] = "true",
-
-            };
-
-            var newGid = await client.AddUriAsync([task.Url], options, CancellationToken.None);
-
-            lock (_gate)
-
-            {
-
-                if (oldGid is { } og)
-
-                {
-
-                    _gidToTaskId.Remove(og);
-
-                    _gidToClient.Remove(og);
-
-                }
-
-
-
-                _tasks[task.Id] = task;
-
-                _gidToTaskId[newGid] = task.Id;
-
-                _gidToClient[newGid] = client;
-
-            }
-
-
-
-            task.EngineId = newGid;
-
-            task.Status = DownloadStatus.Active;
-
-            task.Error = null;
-
-            task.CompletedBytes = 0;
-
-            task.TotalBytes = 0;
-
-            task.SpeedBytesPerSec = 0;
-
-            SaveSnapshot();
-        }
-
-        catch (Exception ex)
-
-        {
-
-            RefreshDiag.Write($"自动从头重下未成：{ex.Message}；保留错误态供用户手动处理");
-
-            _autoRestarted.Remove(task.Id);
-
-            task.Status = DownloadStatus.Error;
-
-            task.Error = EngineErrorText.Friendly("cannot be continued");
-
-        }
+        get { lock (_gate) { return _tasks.Values.ToList(); } }
 
     }
-
-
-
-    private void ApplyStatus(DownloadTask task, JsonElement status)
-
-    {
-
-        if (status.TryGetProperty("totalLength", out var total) && long.TryParse(total.GetString(), out var totalBytes))
-
-        {
-
-            task.TotalBytes = totalBytes;
-
-        }
-
-
-
-        if (status.TryGetProperty("completedLength", out var done) && long.TryParse(done.GetString(), out var doneBytes))
-
-        {
-
-            task.CompletedBytes = doneBytes;
-
-        }
-
-
-
-        if (status.TryGetProperty("downloadSpeed", out var speed) && long.TryParse(speed.GetString(), out var speedBytes))
-
-        {
-
-            task.SpeedBytesPerSec = speedBytes;
-
-        }
-
-
-
-        if (status.TryGetProperty("uploadSpeed", out var up) && long.TryParse(up.GetString(), out var upBytes))
-
-        {
-
-            task.UploadSpeedBytesPerSec = upBytes;
-
-        }
-
-
-
-        if (status.TryGetProperty("connections", out var conn) && int.TryParse(conn.GetString(), out var connections))
-
-        {
-
-            task.Connections = connections;
-
-        }
-
-
-
-        if (status.TryGetProperty("numSeeders", out var seed) && int.TryParse(seed.GetString(), out var seeders))
-
-        {
-
-            task.Seeders = seeders;
-
-        }
-
-
-
-        if (status.TryGetProperty("errorMessage", out var err) && err.GetString() is { } msg && msg.Length > 0)
-
-        {
-
-            // 自动应对（2026-11-02 用户定调：要结果与反馈，不只给报错）：
-
-            // 服务器拒绝续传（同名文件重下/不支持 Range）→ 不甩报错，自动从头重下一次（覆盖旧文件）。
-
-            if (EngineErrorText.ResumeRejected(msg) && _autoRestarted.Add(task.Id))
-
-            {
-
-                RefreshDiag.Write($"续传被拒，自动从头重下（覆盖旧文件）：{task.FileName ?? task.Url}");
-
-                _ = RestartFreshAsync(task);
-
-                return;
-
-            }
-
-
-
-            task.Error = EngineErrorText.Friendly(msg); // 行内展示人话；原文仍在引擎日志
-
-        }
-
-
-
-        if (status.TryGetProperty("files", out var files) && files.ValueKind == JsonValueKind.Array)
-
-        {
-
-            var first = files.EnumerateArray().FirstOrDefault();
-
-            if (first.ValueKind == JsonValueKind.Object && first.TryGetProperty("path", out var path))
-
-            {
-
-                var p = path.GetString();
-
-                if (!string.IsNullOrEmpty(p))
-
-                {
-
-                    task.FilePath = p;
-
-                    // 兼容 Windows 反斜杠与正斜杠（跨平台路径安全）
-
-                    var sep = Math.Max(p.LastIndexOf('/'), p.LastIndexOf('\\'));
-
-                    task.FileName = sep >= 0 ? p[(sep + 1)..] : p;
-
-                }
-
-            }
-
-        }
-
-
-
-        task.Status = status.TryGetProperty("status", out var st) && st.GetString() is string s
-
-            ? s switch
-
-            {
-
-                "active" => DownloadStatus.Active,
-
-                "waiting" => DownloadStatus.Waiting,
-
-                "paused" => DownloadStatus.Paused,
-
-                "error" => DownloadStatus.Error,
-
-                "complete" => DownloadStatus.Complete,
-
-                _ => task.Status,
-
-            }
-
-            : task.Status;
-
-
-
-        Updated?.Invoke(this, task);
-
-        // v2.55：进度拍走后台节流写盘，终态（暂停/出错/完成）立即同步落盘
-        if (task.Status is DownloadStatus.Paused or DownloadStatus.Error or DownloadStatus.Complete)
-        {
-            SaveSnapshot();
-        }
-        else
-        {
-            RequestSnapshotSave();
-        }
-
-        // 完成→回读文件头识别假文件（只校验一次）
-
-        if (task.Status == DownloadStatus.Complete &&
-
-            task.FilePath is { } filePath && _contentChecked.Add(task.Id))
-
-        {
-
-            _ = Task.Run(() => ValidateDownloadedFile(task, filePath));
-
-        }
-
-    }
-
-
-
-    private readonly HashSet<string> _contentChecked = new();
-
-
-
-    /// <summary>黑匣子用：记录已成功轮询过的 gid，只落首次成功一条，避免刷屏。</summary>
-
-    private readonly HashSet<string> _diagPolled = new();
-
-
 
     /// <summary>
 
-    /// 下载完成后的「假文件」识别（v2.54）：个别服务器在限流/异常时会返回一个小网页冒充文件
+    /// 启动回灌（审查红1：重启不丢任务列表）：把快照任务重新登记；
 
-    /// （真机实证：ark.m.qq.com 返回 1KB 名为 Downloader 的 HTML），aria2 照单全收标完成。
-
-    /// 完成时回读文件头，发现是网页就如实把任务标错并提示重下，不让用户拿到打不开的空文件。
+    /// 未终态任务置回等待态由 App 侧队列重新提交，终态任务原样保留作历史。
 
     /// </summary>
 
-    private void ValidateDownloadedFile(DownloadTask task, string filePath)
-
+    private readonly object _saveDebounceGate = new();
+    private bool _saveDebounceQueued;
+    /// <summary>退出冲刷：同步落盘当前快照（修红班 R2 黄2，App.Shutdown 调用，失败不阻断退出）。</summary>
+    public void ForceSnapshotSave()
     {
-
-        try
-
-        {
-
-            if (!File.Exists(filePath))
-
-            {
-
-                return;
-
-            }
-
-
-
-            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-
-            if (fs.Length == 0)
-
-            {
-
-                task.Status = DownloadStatus.Error;
-
-                task.Error = "下载到的文件是空的（服务器未给出真实文件）；建议删除本任务后重试。";
-
-                Updated?.Invoke(this, task);
-
-                return;
-
-            }
-
-
-
-            var buf = new byte[Math.Min(512, fs.Length)];
-
-            var read = fs.Read(buf, 0, buf.Length);
-
-            var head = System.Text.Encoding.UTF8.GetString(buf, 0, read).TrimStart();
-
-            if (head.Length > 0 && (head[0] == '<' || head.StartsWith("{", StringComparison.Ordinal)))
-
-            {
-
-                task.Status = DownloadStatus.Error;
-
-                task.Error = "服务器返回的是网页而不是文件（常见于限流或链接过期）；建议删除本任务后重新下载。";
-
-                Updated?.Invoke(this, task);
-
-            }
-
-        }
-
-        catch (Exception)
-
-        {
-
-            // 识别属于增强校验，任何失败都不影响任务本身
-
-        }
-
+        try { SaveSnapshot(); } catch { /* 快照保存失败不阻断退出 */ }
     }
 
-
-
-    /// <summary>把当前任务快照落盘（异步旁路，失败只落黑匣子，不影响下载主链路）。</summary>
+/// <summary>把当前任务快照落盘（异步旁路，失败只落黑匣子，不影响下载主链路）。</summary>
     private void SaveSnapshot()
     {
         if (_store is null)
         {
             return;
         }
-
         List<DownloadTask> snapshot;
         lock (_gate)
         {
             snapshot = [.. _tasks.Values];
         }
-
         try
         {
             _store.Save(snapshot);
@@ -1289,10 +816,7 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         }
     }
 
-    private readonly object _saveDebounceGate = new();
-    private bool _saveDebounceQueued;
-
-    /// <summary>
+/// <summary>
     /// v2.55 修复「下载页卡死、任务删不掉」：状态回写路径每 800ms 在界面线程同步写盘
     /// （序列化+临时文件+File.Replace），下载高峰时界面整线程被磁盘拖死，删除/暂停全部无响应。
     /// 进度快照改为后台节流合并写：500ms 防抖合并；进度本体有 .aria2 控制文件兜底，
@@ -1305,7 +829,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         {
             return;
         }
-
         lock (_saveDebounceGate)
         {
             if (_saveDebounceQueued)
@@ -1314,7 +837,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             }
             _saveDebounceQueued = true;
         }
-
         _ = Task.Run(async () =>
         {
             try
@@ -1336,7 +858,7 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         });
     }
 
-    /// <summary>
+/// <summary>
     /// 应用启动时的会话恢复：把上次退出前的任务列表接回来。
     /// 未终态任务重新提交引擎（aria2 无跨进程会话，旧 gid 已失效，一律换新号续传，进度靠 .aria2 控制文件不丢）；
     /// 暂停任务重提交后立即再暂停；本地种子（torrent: 前缀，种子文件不落盘）无法重提交，如实标错并给出指引；
@@ -1348,7 +870,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         {
             return 0;
         }
-
         var snapshot = _store.Load();
         var restored = 0;
         foreach (var task in snapshot)
@@ -1358,7 +879,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             {
                 continue; // 已在列表（如恢复与新增竞态）：以现有为准，不重复
             }
-
             if (task.Status is DownloadStatus.Complete or DownloadStatus.Error)
             {
                 lock (_gate)
@@ -1367,7 +887,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 }
                 continue;
             }
-
             if (task.Url.StartsWith("torrent:", StringComparison.OrdinalIgnoreCase))
             {
                 task.Status = DownloadStatus.Error;
@@ -1380,7 +899,6 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 SaveSnapshot();
                 continue;
             }
-
             try
             {
                 var wasPaused = task.Status == DownloadStatus.Paused; // AddAsync 会把状态改写为 Active，先记住原状
@@ -1413,13 +931,538 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 RefreshDiag.Write($"任务恢复失败：{task.FileName ?? task.Url}：{ex.Message}");
             }
         }
-
         SaveSnapshot();
         if (restored > 0)
         {
             RefreshDiag.Write($"会话恢复：{restored} 个未完成任务已重新提交引擎续传");
         }
         return restored;
+    }
+
+    public void RestorePending(IEnumerable<DownloadTask> restored)
+
+    {
+
+        // 2026-11-15 修红班 R2 红3：同前——锁内登记，锁外统一通知。
+
+        List<DownloadTask> toNotify;
+
+        lock (_gate)
+
+        {
+
+            toNotify = new List<DownloadTask>();
+
+            foreach (var task in restored)
+
+            {
+
+                if (_tasks.ContainsKey(task.Id)) continue;
+
+                if (task.Status is not (DownloadStatus.Complete or DownloadStatus.Error))
+
+                {
+
+                    task.EngineId = null;
+
+                    task.Status = DownloadStatus.Waiting;
+
+                }
+
+                _tasks[task.Id] = task;
+
+                toNotify.Add(task);
+
+            }
+
+        }
+
+        foreach (var task in toNotify)
+
+        {
+
+            Updated?.Invoke(this, task);
+
+        }
+
+    }
+
+    private Aria2Client ResolveClient(string gid)
+
+    {
+
+        lock (_gate)
+
+        {
+
+            return _gidToClient.TryGetValue(gid, out var client) ? client : _client;
+
+        }
+
+    }
+
+    private readonly HashSet<string> _autoRestarted = new();
+
+    // ---- 停滞自愈（2026-11-03 真机反馈「下载中 45.6% 却永远不动，文件也没下完」）----
+
+    // RPC 正常、引擎进程活着，个别连接挂死后任务一直停在「下载中」零速度。连续 30 秒零速度
+
+    // 的 HTTP/FTP 活动任务，自动换新号续传重下（进度不丢）；每任务最多 2 次，超限如实标错。
+
+    private const int StallRestartLimit = 2;
+
+    private readonly Dictionary<string, DateTime> _stallSince = new(); // taskId -> 首次零速时刻
+
+    private readonly Dictionary<string, int> _stallRestarts = new();   // taskId -> 已自动续传次数
+
+    private void DetectStall(DownloadTask task)
+
+    {
+
+        // 只盯 HTTP/FTP 下载中的零速任务：BT/磁力初期找种没速度是常态，不能误伤
+
+        // 2026-11-15 修红班 R2 红2：停滞字典与阈值判定整体收进 _gate，与轮询/自愈并发流互斥。
+
+        bool restart = false;
+
+        int usedNext = 0;
+
+        DownloadTask? exhausted = null;
+
+        lock (_gate)
+
+        {
+
+            var stalled = task.Status == DownloadStatus.Active && task.SpeedBytesPerSec <= 0 &&
+
+                          (task.Kind == LinkKind.Http || task.Kind == LinkKind.Ftp);
+
+            if (!stalled)
+
+            {
+
+                _stallSince.Remove(task.Id);
+
+                return;
+
+            }
+
+            var now = DateTime.UtcNow;
+
+            if (!_stallSince.TryGetValue(task.Id, out var since))
+
+            {
+
+                _stallSince[task.Id] = now;
+
+                return;
+
+            }
+
+            if ((now - since).TotalSeconds < 30)
+
+            {
+
+                return;
+
+            }
+
+            if (_stallRestarts.TryGetValue(task.Id, out var used) && used >= StallRestartLimit)
+
+            {
+
+                // 红3 同口径：只改状态，事件留给锁外统一触发（exhausted 非空即有待通知任务）。
+
+                task.Status = DownloadStatus.Error;
+
+                task.Error = "下载停滞且自动续传多次未恢复；建议删除本任务后重新下载。";
+
+                exhausted = task;
+
+                return;
+
+            }
+
+            _stallSince.Remove(task.Id);
+
+            usedNext = used + 1;
+
+            _stallRestarts[task.Id] = usedNext;
+
+            restart = true;
+
+        }
+
+        if (exhausted != null)
+
+        {
+
+            Updated?.Invoke(this, exhausted);
+
+            return;
+
+        }
+
+        if (!restart) return;
+
+        RefreshDiag.Write($"下载停滞超过 30 秒，自动换号续传（第 {usedNext} 次）：{task.FileName ?? task.Url}");
+
+        _ = RestartFreshAsync(task, resume: true);
+
+    }
+
+    /// <summary>续传被拒后的自动自愈：同一地址从头重下（覆盖旧文件），每任务至多一次，失败则回落为错误+人话指引。
+
+    /// resume=true 时改为续传重下（进度不丢），用于「下载中却停滞不动」的任务级自愈。</summary>
+
+    private async Task RestartFreshAsync(DownloadTask task, bool resume = false)
+
+    {
+
+        try
+
+        {
+
+            var oldGid = task.EngineId;
+
+            var client = oldGid is { } g ? ResolveClient(g) : _client;
+
+            // 2026-11-15 修红班 R2 黄5：续传前先 forceRemove 旧 gid，掐掉旧连接与新任务（allow-overwrite）的竞争窗口。
+            if (oldGid is { } og2)
+
+            {
+
+                try { await client.RemoveAsync(og2, CancellationToken.None); }
+
+                catch (Exception removeEx) { RefreshDiag.Write($"停滞自愈移除旧 gid 未成（继续换号重下）：{removeEx.Message}"); }
+
+            }
+
+            var options = new Dictionary<string, string>
+
+            {
+
+                ["dir"] = task.SaveDir,
+
+                ["continue"] = resume ? "true" : "false",
+
+                ["allow-overwrite"] = "true",
+
+            };
+
+            var newGid = await client.AddUriAsync([task.Url], options, CancellationToken.None);
+
+            // 2026-11-15 修红班 R2 红2：task 对象字段的改写整体收进 _gate，堵住与轮询流并发读写造成的状态跳变窗口。
+
+            lock (_gate)
+
+            {
+
+                if (oldGid is { } og)
+
+                {
+
+                    _gidToTaskId.Remove(og);
+
+                    _gidToClient.Remove(og);
+
+                }
+
+                _tasks[task.Id] = task;
+
+                _gidToTaskId[newGid] = task.Id;
+
+                _gidToClient[newGid] = client;
+
+                task.EngineId = newGid;
+
+                task.Status = DownloadStatus.Active;
+
+                task.Error = null;
+
+                task.CompletedBytes = 0;
+
+                task.TotalBytes = 0;
+
+                task.SpeedBytesPerSec = 0;
+
+            }
+
+        }
+
+        catch (Exception ex)
+
+        {
+
+            RefreshDiag.Write($"自动从头重下未成：{ex.Message}；保留错误态供用户手动处理");
+
+            lock (_gate)
+
+            {
+
+                _autoRestarted.Remove(task.Id);
+
+                task.Status = DownloadStatus.Error;
+
+            }
+
+            task.Error = EngineErrorText.Friendly("cannot be continued");
+
+        }
+
+    }
+
+    private void ApplyStatus(DownloadTask task, JsonElement status)
+
+    {
+
+        if (status.TryGetProperty("totalLength", out var total) && long.TryParse(total.GetString(), out var totalBytes))
+
+        {
+
+            task.TotalBytes = totalBytes;
+
+        }
+
+        if (status.TryGetProperty("completedLength", out var done) && long.TryParse(done.GetString(), out var doneBytes))
+
+        {
+
+            task.CompletedBytes = doneBytes;
+
+        }
+
+        if (status.TryGetProperty("downloadSpeed", out var speed) && long.TryParse(speed.GetString(), out var speedBytes))
+
+        {
+
+            task.SpeedBytesPerSec = speedBytes;
+
+        }
+
+        if (status.TryGetProperty("uploadSpeed", out var up) && long.TryParse(up.GetString(), out var upBytes))
+
+        {
+
+            task.UploadSpeedBytesPerSec = upBytes;
+
+        }
+
+        if (status.TryGetProperty("connections", out var conn) && int.TryParse(conn.GetString(), out var connections))
+
+        {
+
+            task.Connections = connections;
+
+        }
+
+        if (status.TryGetProperty("numSeeders", out var seed) && int.TryParse(seed.GetString(), out var seeders))
+
+        {
+
+            task.Seeders = seeders;
+
+        }
+
+        if (status.TryGetProperty("errorMessage", out var err) && err.GetString() is { } msg && msg.Length > 0)
+
+        {
+
+            // 自动应对（2026-11-02 用户定调：要结果与反馈，不只给报错）：
+
+            // 服务器拒绝续传（同名文件重下/不支持 Range）→ 不甩报错，自动从头重下一次（覆盖旧文件）。
+
+            if (EngineErrorText.ResumeRejected(msg) && _autoRestarted.Add(task.Id))
+
+            {
+
+                RefreshDiag.Write($"续传被拒，自动从头重下（覆盖旧文件）：{task.FileName ?? task.Url}");
+
+                _ = RestartFreshAsync(task);
+
+                return;
+
+            }
+
+            task.Error = EngineErrorText.Friendly(msg); // 行内展示人话；原文仍在引擎日志
+
+        }
+
+        if (status.TryGetProperty("files", out var files) && files.ValueKind == JsonValueKind.Array)
+
+        {
+
+            var first = files.EnumerateArray().FirstOrDefault();
+
+            if (first.ValueKind == JsonValueKind.Object && first.TryGetProperty("path", out var path))
+
+            {
+
+                var p = path.GetString();
+
+                if (!string.IsNullOrEmpty(p))
+
+                {
+
+                    task.FilePath = p;
+
+                    // 兼容 Windows 反斜杠与正斜杠（跨平台路径安全）
+
+                    var sep = Math.Max(p.LastIndexOf('/'), p.LastIndexOf('\\'));
+
+                    task.FileName = sep >= 0 ? p[(sep + 1)..] : p;
+
+                }
+
+            }
+
+        }
+
+        task.Status = status.TryGetProperty("status", out var st) && st.GetString() is string s
+
+            ? s switch
+
+            {
+
+                "active" => DownloadStatus.Active,
+
+                "waiting" => DownloadStatus.Waiting,
+
+                "paused" => DownloadStatus.Paused,
+
+                "error" => DownloadStatus.Error,
+
+                "complete" => DownloadStatus.Complete,
+
+                _ => task.Status,
+
+            }
+
+            : task.Status;
+
+        Updated?.Invoke(this, task);
+
+        // 完成→回读文件头识别假文件（只校验一次）
+
+        if (task.Status == DownloadStatus.Complete &&
+
+            task.FilePath is { } filePath && _contentChecked.Add(task.Id))
+
+        {
+
+            _ = Task.Run(() => ValidateDownloadedFile(task, filePath));
+
+        }
+
+    }
+
+    private readonly HashSet<string> _contentChecked = new();
+
+    /// <summary>黑匣子用：记录已成功轮询过的 gid，只落首次成功一条，避免刷屏。</summary>
+
+    private readonly HashSet<string> _diagPolled = new();
+
+    /// <summary>
+
+    /// 下载完成后的「假文件」识别（v2.54）：个别服务器在限流/异常时会返回一个小网页冒充文件
+
+    /// （真机实证：ark.m.qq.com 返回 1KB 名为 Downloader 的 HTML），aria2 照单全收标完成。
+
+    /// 完成时回读文件头，发现是网页就如实把任务标错并提示重下，不让用户拿到打不开的空文件。
+
+    /// </summary>
+
+    /// <summary>
+    /// 假文件判定（2026-11-15 修红班 R2 红1 收口）：只在「扩展名预期二进制而内容是 HTML/JSON」冲突时判假；
+    /// .json/.xml/.html/.svg 等文本类文件合法以 { 或 < 开头，不参与首字节否决。
+    /// public static 供回归断言直接覆盖（对齐 BuildArguments 先例）。
+    /// </summary>
+    public static bool IsSuspiciousHeader(string ext, string head)
+
+    {
+
+        var expectBinary = ext.Equals(".zip", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".exe", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".msi", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".7z", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".rar", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".apk", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".iso", StringComparison.OrdinalIgnoreCase)
+
+                        || ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+
+        return expectBinary && (head[0] == '<' || head.StartsWith("{", StringComparison.Ordinal));
+
+    }
+
+    private void ValidateDownloadedFile(DownloadTask task, string filePath)
+
+    {
+
+        try
+
+        {
+
+            if (!File.Exists(filePath))
+
+            {
+
+                return;
+
+            }
+
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            if (fs.Length == 0)
+
+            {
+
+                task.Status = DownloadStatus.Error;
+
+                task.Error = "下载到的文件是空的（服务器未给出真实文件）；建议删除本任务后重试。";
+
+                Updated?.Invoke(this, task);
+
+                return;
+
+            }
+
+            var buf = new byte[Math.Min(512, fs.Length)];
+
+            var read = fs.Read(buf, 0, buf.Length);
+
+            var head = System.Text.Encoding.UTF8.GetString(buf, 0, read).TrimStart();
+
+            // 2026-11-15 修红班 R2 红1：假文件识别只在「扩展名与内容冲突」时判错——
+            // .json/.xml/.html/.svg 等文本类文件本身合法以 { 或 < 开头，不能按首字节一票否决（曾 100% 误杀 .json 下载）。
+            if (head.Length > 0 && IsSuspiciousHeader(Path.GetExtension(filePath), head))
+
+            {
+
+                task.Status = DownloadStatus.Error;
+
+                task.Error = "服务器返回的是网页而不是文件（常见于限流或链接过期）；建议删除本任务后重新下载。";
+
+                Updated?.Invoke(this, task);
+
+            }
+
+        }
+
+        catch (Exception)
+
+        {
+
+            // 识别属于增强校验，任何失败都不影响任务本身
+
+        }
+
     }
 
     private string RequireGid(string taskId)
@@ -1440,44 +1483,56 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-
-
         throw new KeyNotFoundException($"任务不存在或未提交引擎：{taskId}");
 
     }
-
-
 
     private void MarkStatus(string taskId, DownloadStatus status)
 
     {
 
+        DownloadTask? task;
+
         lock (_gate)
 
         {
 
-            if (_tasks.TryGetValue(taskId, out var task))
+            _tasks.TryGetValue(taskId, out task);
+
+            if (task != null)
 
             {
 
                 task.Status = status;
 
-                Updated?.Invoke(this, task);
-
             }
 
         }
 
-        SaveSnapshot();
+        if (task != null)
+
+        {
+
+            Updated?.Invoke(this, task);
+            // v2.55：进度拍走后台节流写盘，终态（暂停/出错/完成）立即同步落盘
+            if (task.Status is DownloadStatus.Paused or DownloadStatus.Error or DownloadStatus.Complete)
+            {
+                SaveSnapshot();
+            }
+            else
+            {
+                RequestSnapshotSave();
+            }
+        }
 
     }
-
-
 
     public void Dispose()
 
     {
 
+        // 生命周期终点同步冲刷快照：防抖窗口内未落盘的最后状态不能随进程消失（合流班口径，与退出冲刷同语义）。
+        SaveSnapshot();
         _client.Dispose();
 
         _ftpClient?.Dispose();
@@ -1485,4 +1540,3 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
     }
 
 }
-

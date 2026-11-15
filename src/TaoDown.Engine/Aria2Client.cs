@@ -14,7 +14,7 @@ public sealed class Aria2Options
     /// <summary>RPC 密钥，进程启动时随机生成，防本机其他程序误连。</summary>
     public string Secret { get; init; } = Guid.NewGuid().ToString("N");
 
-    public string DownloadDir { get; init; } = @"D:\Program Files\Downloads\TaoDown";
+    public string DownloadDir { get; init; } = TaoDown.Core.DownloadSettings.DefaultDownloadDir;
 
     /// <summary>引擎运行日志路径（排查“下载中但无进度”类问题）。</summary>
     public string LogPath { get; set; } = "aria2.log";
@@ -74,7 +74,7 @@ public sealed class Aria2Client
         return root.GetProperty("result").Clone();
     }
 
-    public Task<string> AddUriAsync(IEnumerable<string> urls, IDictionary<string, string>? downloadOptions = null, CancellationToken ct = default)
+    public async Task<string> AddUriAsync(IEnumerable<string> urls, IDictionary<string, string>? downloadOptions = null, CancellationToken ct = default)
     {
         var parameters = new List<object> { urls.ToArray() };
         if (downloadOptions is { Count: > 0 })
@@ -82,13 +82,16 @@ public sealed class Aria2Client
             parameters.Add(downloadOptions);
         }
 
-        return CallAsync("aria2.addUri", [.. parameters], ct)
-            .ContinueWith(t => t.Result.GetString()!, ct, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+        // 2026-11-15 修红班 R2 黄1：改 async/await 透传——原 ContinueWith(OnlyOnRanToCompletion) 在 RPC 失败时把真实错误吞成 TaskCanceledException。
+        var result = await CallAsync("aria2.addUri", [.. parameters], ct);
+        return result.GetString()!;
     }
 
-    public Task<string> AddTorrentAsync(byte[] torrentBytes, CancellationToken ct = default) =>
-        CallAsync("aria2.addTorrent", [Convert.ToBase64String(torrentBytes)], ct)
-            .ContinueWith(t => t.Result.GetString()!, ct, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+    public async Task<string> AddTorrentAsync(byte[] torrentBytes, CancellationToken ct = default)
+    {
+        var result = await CallAsync("aria2.addTorrent", [Convert.ToBase64String(torrentBytes)], ct);
+        return result.GetString()!;
+    }
 
     public Task PauseAsync(string gid, CancellationToken ct = default) => CallAsync("aria2.pause", [gid], ct);
 

@@ -9,8 +9,11 @@ public sealed class DownloadSettings
     public static readonly string LegacyDownloadDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "TaoDown");
 
-    /// <summary>下载根目录（默认 D:\Program Files\Downloads\TaoDown）。</summary>
-    public string DownloadDir { get; set; } = @"D:\Program Files\Downloads\TaoDown";
+    /// <summary>默认下载根目录单一来源（2026-11-15 修红班 R2 黄4：原 Aria2Client/Settings 双处硬编码，收敛到此一处）。</summary>
+    public const string DefaultDownloadDir = @"D:\Program Files\Downloads\TaoDown";
+
+    /// <summary>下载根目录（默认取 DefaultDownloadDir）。</summary>
+    public string DownloadDir { get; set; } = DefaultDownloadDir;
 
     /// <summary>同时下载任务数上限。</summary>
     public int MaxConcurrent { get; set; } = 3;
