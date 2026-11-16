@@ -300,6 +300,7 @@ jobs:
           pwsh -File e2e/human_sim.ps1
 
       - name: 超大文件+满列表并发回归（32GB 断点续传 + 40 任务并发 + 崩溃恢复）
+        if: always()   # v4 修红：真人模拟红灯不再连带跳过大文件闸，两闸各自暴露问题
         shell: pwsh
         run: |
           pwsh -File e2e/bigfile_regression.ps1 -BigFileSizeGB 32 -ListCount 40

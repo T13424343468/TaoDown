@@ -70,12 +70,16 @@ function Set-LinkBox([string]$url, [int]$timeoutSec = 20) {
 
 # ---------- 入列核验（v2 新增）----------
 function Get-TaskRows {
+    # v4 修红（run 43795928366）：云机上 PropertyCondition 构造在 WinUI 窗口上偶发 null condition 直接炸批——
+    # 改 TrueCondition 枚举后代、PowerShell 侧过滤行类型，枚举异常只回空数组让用例走未入列路径
     $w = Get-MainWindow
     if (-not $w) { return @() }
     $list = Find-ById $w 'TaskList'
     if (-not $list) { return @() }
-    return @($list.FindAll([System.Windows.Automation.TreeScope]::Children,
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem))))
+    try {
+        $all = @($list.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.AutomationElement]::TrueCondition))
+    } catch { return @() }
+    return @($all | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem })
 }
 function Test-Enqueued([string]$needle, [int]$timeoutSec = 30) {
     $deadline = (Get-Date).AddSeconds($timeoutSec)
@@ -390,8 +394,10 @@ try {
     if (Get-Process TaoDown -ErrorAction SilentlyContinue) { Record M24 PASS '关窗后进程存活（托盘）' } else { Record M24 FAIL '关窗即退' }
 }
 catch {
-    # v3 修红：try 块中断的原因以前被 finally 的汇总 throw 覆盖，先如实记账
-    Record 'ABORT' FAIL "用例批中断于第 $($script:Ledger.Count + 1) 条前后：$($_.Exception.Message)"
+    # v3 修红：try 块中断的原因以前被 finally 的汇总 throw 覆盖，先如实记账；v4 补抛点行号
+    $trace = ''
+    try { $trace = $_.Exception.ScriptStackTrace } catch { }
+    Record 'ABORT' FAIL "用例批中断于第 $($script:Ledger.Count + 1) 条前后：$($_.Exception.Message) @(抛点:$trace)"
 }
 finally {
     # ===== 汇总 =====
