@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -89,6 +89,10 @@ public class DownloadQueueTests
 
         public event EventHandler<string>? Removed;
 
+        public void RegisterWaiting(DownloadTask task)
+        {
+            // 测试替身：等待登记无副作用
+        }
         public Task<string> AddAsync(DownloadTask task, CancellationToken ct = default)
         {
             Added.Add(task);

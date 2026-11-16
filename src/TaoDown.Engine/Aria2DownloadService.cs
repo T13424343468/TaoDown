@@ -1,4 +1,4 @@
-﻿﻿using System.Text.Json;
+using System.Text.Json;
 
 using TaoDown.Core;
 
@@ -944,6 +944,40 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
         });
     }
 
+/// <summary>恢复链路交回的等待任务（App 侧创建队列后取走转交下载队列）。</summary>
+    private readonly List<DownloadTask> _restoredWaiting = [];
+
+    /// <summary>
+    /// 等待队列登记：任务尚未提交引擎就进列表并落盘（状态 Waiting）。
+    /// 2026-11-17 云批实锤：等待队列此前纯内存，进程被杀 40 个排队任务全灭，
+    /// 快照里没有它们，恢复恒为 0，重启后 0/40 永不下载。
+    /// </summary>
+    public void RegisterWaiting(DownloadTask task)
+    {
+        bool added;
+        lock (_gate)
+        {
+            added = _tasks.TryAdd(task.Id, task);
+        }
+        if (added)
+        {
+            task.Status = DownloadStatus.Waiting;
+            Updated?.Invoke(this, task);
+            SaveSnapshot(); // 关键状态同步落盘（终态同口径）：登记后即被杀也要能恢复
+        }
+    }
+
+    /// <summary>取走会话恢复出的等待任务，由 App 侧转交下载队列按并发上限派发；取后清空。</summary>
+    public IReadOnlyList<DownloadTask> TakeRestoredWaiting()
+    {
+        lock (_gate)
+        {
+            var list = _restoredWaiting.ToList();
+            _restoredWaiting.Clear();
+            return list;
+        }
+    }
+
 /// <summary>
     /// 应用启动时的会话恢复：把上次退出前的任务列表接回来。
     /// 未终态任务重新提交引擎（aria2 无跨进程会话，旧 gid 已失效，一律换新号续传，进度靠 .aria2 控制文件不丢）；
@@ -983,6 +1017,17 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 }
                 Updated?.Invoke(this, task);
                 SaveSnapshot();
+                continue;
+            }
+            if (task.Status == DownloadStatus.Waiting)
+            {
+                // 等待任务不直塞引擎：登记回列表并交 App 侧队列按并发上限派发
+                lock (_gate)
+                {
+                    _tasks[task.Id] = task;
+                    _restoredWaiting.Add(task);
+                }
+                restored++;
                 continue;
             }
             try

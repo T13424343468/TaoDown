@@ -1,4 +1,4 @@
-﻿using TaoDown.Core;
+using TaoDown.Core;
 using Xunit;
 
 namespace TaoDown.Tests.Unit;
@@ -13,6 +13,10 @@ public class QueueDepthTests
         public event EventHandler<DownloadTask>? Updated;
         public event EventHandler<string>? Removed;
 
+        public void RegisterWaiting(DownloadTask task)
+        {
+            // 测试替身：等待登记无副作用
+        }
         public Task<string> AddAsync(DownloadTask task, CancellationToken ct = default)
         {
             lock (Added)

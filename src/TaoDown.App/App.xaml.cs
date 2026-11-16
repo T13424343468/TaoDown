@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.Win32;
 
 using TaoDown.Core;
@@ -122,6 +122,26 @@ public partial class App : Application
                 : $"系统代理已跟随：{proxyAddress}");
             Queue = new DownloadQueue(Downloads) { MaxConcurrent = Math.Max(1, Settings.MaxConcurrent) };
             StartupLog.Write("下载队列就绪");
+
+            // 引擎自愈重启后的未终态任务重提：服务层只发事件，这里接回队列
+            //（2026-11-17 云批实锤：此前无人订阅，任务被标回等待态后永远卡「等待开始」）
+            Downloads.NeedsResubmit += async (_, resubmitTask) =>
+            {
+                try
+                {
+                    await Queue.EnqueueAsync(resubmitTask);
+                }
+                catch (Exception ex)
+                {
+                    StartupLog.Write($"任务重提失败：{resubmitTask.FileName ?? resubmitTask.Url}", ex);
+                }
+            };
+
+            // 会话恢复出的等待任务交回队列按并发上限派发（等待任务现已落盘，恢复后不再丢）
+            foreach (var waitingTask in Downloads.TakeRestoredWaiting())
+            {
+                _ = Queue.EnqueueAsync(waitingTask);
+            }
 
             // 窗口先亮: 浏览器接管等放后台, 不让慢启动堵住主界面
             Main = new MainWindow();

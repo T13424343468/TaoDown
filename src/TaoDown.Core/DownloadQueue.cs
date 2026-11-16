@@ -1,4 +1,4 @@
-﻿namespace TaoDown.Core;
+namespace TaoDown.Core;
 
 /// <summary>
 /// 下载队列：并发上限、优先级、定时开始。
@@ -41,6 +41,8 @@ public sealed class DownloadQueue : IDisposable
     /// <summary>入队；priority 越大越先开始，startAt 晚于当前时间则定时开始。</summary>
     public async Task EnqueueAsync(DownloadTask task, int priority = 0, DateTime? startAt = null, CancellationToken ct = default)
     {
+        // 等待任务先落盘：此前等待队列纯内存，进程被杀任务全灭（2026-11-17 云批实锤 0/40）
+        _service.RegisterWaiting(task);
         lock (_gate)
         {
             _waiting.Add(new Entry { Task = task, Priority = priority, StartAt = startAt });
@@ -115,12 +117,15 @@ public sealed class DownloadQueue : IDisposable
                 }
                 catch
                 {
-                    // 提交失败：释放名额并放回等待队列，等下次 Pump 重试
+                    // 提交失败：释放名额并放回等待队列，5 秒后自动重泵一次
+                    //（此前只靠下一次事件重泵，引擎自愈窗口内等待任务会无限滞留）
                     lock (_gate)
                     {
                         _activeIds.Remove(next.Task.Id);
                         _waiting.Add(next);
                     }
+
+                    _ = RetryPumpLaterAsync(ct);
 
                     throw;
                 }
@@ -134,6 +139,23 @@ public sealed class DownloadQueue : IDisposable
             {
                 _pumping = false;
             }
+        }
+    }
+
+    /// <summary>提交失败后的延时重泵：给引擎自愈/源恢复留窗口，只重试一次，避免无限循环。</summary>
+    private async Task RetryPumpLaterAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            await PumpAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            // 重试仍失败：保留等待队列，等下一次事件或自愈重泵；不向外抛
         }
     }
 

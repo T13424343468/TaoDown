@@ -1,4 +1,4 @@
-﻿using TaoDown.Core;
+using TaoDown.Core;
 using Xunit;
 
 namespace TaoDown.Tests;
@@ -32,6 +32,10 @@ public class QueueStressTests
             }
         }
 
+        public void RegisterWaiting(DownloadTask task)
+        {
+            // 测试替身：等待登记无副作用
+        }
         public Task<string> AddAsync(DownloadTask task, CancellationToken ct = default)
         {
             MaybeFail();

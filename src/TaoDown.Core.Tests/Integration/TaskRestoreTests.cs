@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -229,5 +229,42 @@ public sealed class TaskRestoreTests : IDisposable
             Assert.Equal($"g{_server.AddUriCalls}", back.EngineId);
             Assert.Equal(DownloadStatus.Active, back.Status); // 重提交后进入活动态，进度靠续传控制文件接回
         }
+    }
+    [Fact]
+    public void S10_RegisterWaiting_PersistsSnapshotAsWaiting()
+    {
+        // 2026-11-17 云批实锤：等待队列此前纯内存，进程被杀 40 个排队任务全灭。
+        // 等待登记必须立刻进快照（状态 Waiting），崩溃后才有得恢复。
+        var store = NewStore();
+        using var svc = new Aria2DownloadService(
+            new Aria2Client(StubAria2Server.OptionsFor(_server)), null, store);
+        var task = StubAria2Server.NewTask("http://a.com/queued.zip");
+        svc.RegisterWaiting(task);
+
+        var snap = store.Load();
+        var back = Assert.Single(snap);
+        Assert.Equal(task.Id, back.Id);
+        Assert.Equal(DownloadStatus.Waiting, back.Status);
+    }
+
+    [Fact]
+    public async Task S11_Restore_WaitingTaskGoesToQueueNotEngine()
+    {
+        // 等待任务恢复时不直塞引擎：交 App 侧队列按并发上限派发
+        var store = NewStore();
+        var queued = StubAria2Server.NewTask("http://a.com/waiting.zip");
+        queued.Status = DownloadStatus.Waiting;
+        store.Save([queued]);
+        _server.AddUriCalls = 0;
+
+        using var fresh = new Aria2DownloadService(
+            new Aria2Client(StubAria2Server.OptionsFor(_server)), null, store);
+        var restored = await fresh.RestorePendingAsync();
+        Assert.Equal(1, restored);
+        Assert.Equal(0, _server.AddUriCalls); // 未提交引擎
+        var taken = Assert.Single(fresh.TakeRestoredWaiting());
+        Assert.Equal(queued.Id, taken.Id);
+        Assert.Equal(DownloadStatus.Waiting, taken.Status);
+        Assert.Empty(fresh.TakeRestoredWaiting()); // 取后清空，不重复交回
     }
 }
