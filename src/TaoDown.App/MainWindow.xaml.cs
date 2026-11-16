@@ -1034,6 +1034,43 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
     {
 
+        // run 43881371508 修红（真机黑匣子实锤）：Updated 事件在线程池轮询线程上触发，
+        // 这里读 PageFrame.Content 属于跨线程访问 WinRT UI 对象，直接 COMException——
+        // 引擎状态拿到了却写不进界面（真机「正在连接服务器」至死不变）。
+        // 修法：非界面线程一律先回界面线程再处理；回写异常只记日志不外抛，绝不断轮询链。
+
+        if (!DispatcherQueue.HasThreadAccess)
+
+        {
+
+            DispatcherQueue.TryEnqueue(() => OnTaskUpdated(sender, task));
+
+            return;
+
+        }
+
+        try
+
+        {
+
+        UpdateTaskUi(task);
+
+    }
+
+    catch (Exception uiEx)
+
+    {
+
+        StartupLog.Write($"界面回写异常（已拦截，不影响轮询）：{uiEx.GetType().Name}: {uiEx.Message}");
+
+    }
+
+    }
+
+    private void UpdateTaskUi(DownloadTask task)
+
+    {
+
         if (PageFrame.Content is DownloadsPage page)
 
         {
