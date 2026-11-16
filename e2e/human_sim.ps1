@@ -222,11 +222,14 @@ function Start-App { Start-Process $script:appExe; Start-Sleep -Seconds 10; $nul
 $appExe = Find-AppExe
 $dataRoot = foreach ($p in "D:\TaoDownData\TaoDown", "$env:USERPROFILE\TaoDownData\TaoDown") { if (Test-Path $p) { $p; break } }
 $log = Join-Path $dataRoot "logs\startup.log"
-New-Item -ItemType Directory -Force -Path "..\evidence\human" | Out-Null
-$evd = Resolve-Path "..\evidence\human"
+# v3 修红：证据目录锚到脚本所在仓（CI 产物只收仓内 evidence/**），相对 cwd 写到仓外会被上传步骤漏掉
+New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "..\evidence\human") | Out-Null
+$evd = (Resolve-Path (Join-Path $PSScriptRoot "..\evidence\human")).Path
 
 try {
     # ===== M1 粘贴×400MB 大文件 =====
+    # v3 修红（run 43793086281）：v2 重写时误删 Start-App，整批对没启动的应用找元素——补回
+    $null = Start-App
     SnapCase 'M1' 'before'
     $ok = Set-LinkBox "http://127.0.0.1:$port/m1.bin"
     if (-not $ok) { Record M1 FAIL 'LinkBox/AddButton UIA 未生效' }
@@ -378,14 +381,17 @@ try {
     SnapCase 'M23' 'after'
 
     # ===== M24 关窗最小化托盘 =====
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children,
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'TaoDown')))
+    # v3 修红：主窗标题带版本号（TaoDown x.y.z），按精确名找不到会假绿——改用 Get-MainWindow
+    $win = Get-MainWindow
     if ($win) {
         ($win.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
         Start-Sleep -Seconds 6
     }
     if (Get-Process TaoDown -ErrorAction SilentlyContinue) { Record M24 PASS '关窗后进程存活（托盘）' } else { Record M24 FAIL '关窗即退' }
+}
+catch {
+    # v3 修红：try 块中断的原因以前被 finally 的汇总 throw 覆盖，先如实记账
+    Record 'ABORT' FAIL "用例批中断于第 $($script:Ledger.Count + 1) 条前后：$($_.Exception.Message)"
 }
 finally {
     # ===== 汇总 =====
