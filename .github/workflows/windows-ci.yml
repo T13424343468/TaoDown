@@ -284,7 +284,7 @@ jobs:
           $log = Get-ChildItem "D:\TaoDownData\TaoDown\logs\startup.log","$env:USERPROFILE\TaoDownData\TaoDown\logs\startup.log" -ErrorAction SilentlyContinue |
                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if ($log) {
-            $slow = Select-String -Path $log.FullName -Pattern '连续单拍耗时异常' | Select-Object -Last 1
+            $slow = Select-String -Path $log.FullName -Pattern '界面心跳连续卡顿' | Select-Object -Last 1
             if ($slow) { throw "下载高峰界面响应不达标：$($slow.Line)" }
           }
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

@@ -412,7 +412,7 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
         var refreshing = false;
 
-        timer.Tick += async (_, _) =>
+        timer.Tick += (_, _) =>
 
         {
 
@@ -428,95 +428,123 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
             refreshing = true;
 
-            var tickWatch = System.Diagnostics.Stopwatch.StartNew();
+            _refreshRounds++;
 
-            try
+            // 刷新心跳：约每分钟落一条，证明轮询循环活着（真机排查「页面不更新」）
+
+            if (_refreshRounds % 60 == 1)
 
             {
 
-                _refreshRounds++;
+                StartupLog.Write($"刷新心跳正常（第 {_refreshRounds} 轮）");
 
-                // 刷新心跳：约每分钟落一条，证明轮询循环活着（真机排查「页面不更新」）
+            }
 
-                if (_refreshRounds % 60 == 1)
+            // 超大文件班修红（run 43799439060）：RPC 轮询此前整段 await 在界面线程定时器上——
 
-                {
+            // 32GB 满速落盘时 aria2 自身响应被拖到秒级，轮询等待被误记成「界面卡死」。
 
-                    StartupLog.Write($"刷新心跳正常（第 {_refreshRounds} 轮）");
+            // 现在轮询整段沉到线程池，界面线程只做结果回填；界面卡不卡改由独立心跳表计（_uiHeartbeat）。
 
-                }
+            _ = Task.Run(async () =>
 
+            {
 
-
-                await App.Downloads!.RefreshAsync();
-
-                // v2.54：引擎进程崩溃后不再无声挂起——连续失败达到阈值就拉起新引擎并恢复队列
-
-                if (App.Downloads.MainRpcFailStreak >= 5 || App.Downloads.FtpRpcFailStreak >= 5)
+                try
 
                 {
 
-                    await App.ReviveEngineAsync();
+                    await App.Downloads!.RefreshAsync();
 
-                }
+                    // v2.54：引擎进程崩溃后不再无声挂起——连续失败达到阈值就拉起新引擎并恢复队列
 
-
-
-                await UpdateTrayTipAsync();
-
-                // v2.55 冻结看门狗：单拍刷新超 1.5 秒如实落日志，真机复现「页面卡死」时一查便知瓶颈
-                // 2026-11-15 超大文件班：几十 G 级满速落盘时单拍偶发抖动（实测 2185ms 一次），
-                // 持续卡顿才判死——单次超限只留痕，连续 3 轮超限落「连续」红线，测试闸以此为准。
-
-                tickWatch.Stop();
-
-                if (tickWatch.ElapsedMilliseconds > 1500)
-
-                {
-
-                    _slowTickStreak++;
-
-                    StartupLog.Write($"刷新单拍耗时异常：{tickWatch.ElapsedMilliseconds}ms（第 {_slowTickStreak} 轮连续，本轮 RPC/落盘/界面刷新合计）");
-
-                    if (_slowTickStreak >= 3)
+                    if (App.Downloads.MainRpcFailStreak >= 5 || App.Downloads.FtpRpcFailStreak >= 5)
 
                     {
 
-                        StartupLog.Write($"连续单拍耗时异常：{_slowTickStreak} 轮持续超 1.5 秒，界面卡死实锤");
+                        await App.ReviveEngineAsync();
 
                     }
 
+                    DispatcherQueue.TryEnqueue(() =>
+
+                    {
+
+                        _ = UpdateTrayTipAsync(); // 本地内存读数 + 托盘文案，代价极小
+
+                        refreshing = false;       // RPC 收尾后才解锁下一轮
+
+                    });
+
                 }
 
-                else
+                catch
 
                 {
 
-                    _slowTickStreak = 0;
+                    // 单轮轮询失败不致命，下轮重试；仍要解锁下一轮
+
+                    DispatcherQueue.TryEnqueue(() => refreshing = false);
+
+                }
+
+            });
+
+        };
+
+        timer.Start();
+
+
+
+        // 界面心跳表（超大文件班修红）：真「界面卡死」的度量——UI 线程回调被拖过 1.5 秒就落痕，
+
+        // 连续 3 轮落「界面心跳连续卡顿」红线。RPC 慢、引擎忙不再误伤此账。
+
+        Interlocked.Exchange(ref _uiHeartbeatLast, Environment.TickCount64);
+
+        var heartbeat = DispatcherQueue.CreateTimer();
+
+        heartbeat.Interval = TimeSpan.FromMilliseconds(250);
+
+        heartbeat.Tick += (_, _) =>
+
+        {
+
+            var now = Environment.TickCount64;
+
+            var gap = now - Interlocked.Read(ref _uiHeartbeatLast);
+
+            Interlocked.Exchange(ref _uiHeartbeatLast, now);
+
+            if (gap > 1500)
+
+            {
+
+                _uiHeartbeatStreak++;
+
+                StartupLog.Write($"界面心跳卡顿：{gap}ms（第 {_uiHeartbeatStreak} 轮连续）");
+
+                if (_uiHeartbeatStreak >= 3)
+
+                {
+
+                    StartupLog.Write($"界面心跳连续卡顿：{_uiHeartbeatStreak} 轮持续超 1.5 秒，界面卡死实锤");
 
                 }
 
             }
 
-            catch (Exception)
+            else
 
             {
 
-                // 单轮刷新失败不致命，下轮重试；防止异常穿到界面层
-
-            }
-
-            finally
-
-            {
-
-                refreshing = false;
+                _uiHeartbeatStreak = 0;
 
             }
 
         };
 
-        timer.Start();
+        heartbeat.Start();
 
 
 
@@ -530,8 +558,9 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
     private long _refreshRounds;
 
-    /// <summary>看门狗连击账：连续超 1.5 秒的单拍轮数，回 0 于正常拍——持续卡顿才判死（超大文件班口径）。</summary>
-    private int _slowTickStreak;
+    /// <summary>界面心跳账：上一拍时间戳与连续卡顿轮数（真正的 UI 线程卡顿度量，RPC 慢不再误伤）。</summary>
+    private long _uiHeartbeatLast;
+    private int _uiHeartbeatStreak;
 
 
 

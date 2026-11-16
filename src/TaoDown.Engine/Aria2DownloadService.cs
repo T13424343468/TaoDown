@@ -267,7 +267,7 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     {
 
-        DownloadTask task;
+        DownloadTask? task;
 
         lock (_gate)
 

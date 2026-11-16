@@ -32,11 +32,18 @@ function Find-ById($root, [string]$id) {
 }
 function Get-MainWindow {
     # 主窗标题固定「TaoDown x.y.z」；询问窗/引导窗标题不同，不会误中
+    # v5 修红（run 43799439060）：云机上 FindAll 在 WinUI 窗口上抛 null condition——
+    # 根子是 UIA 枚举路径，FindAll 一律弃用，改 TreeWalker 逐兄弟走查 + 全程 try/catch
     $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.AutomationElement]::TrueCondition)
-    foreach ($w in $wins) {
-        if ($w.Current.Name -match '^TaoDown [\d\.]+$') { return $w }
-    }
+    try {
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        $el = $walker.GetFirstChild($root)
+        while ($el) {
+            try { $n = $el.Current.Name } catch { $n = '' }
+            if ($n -match '^TaoDown [\d\.]+$') { return $el }
+            try { $el = $walker.GetNextSibling($el) } catch { break }
+        }
+    } catch { }
     return $null
 }
 function Invoke-Button([string]$name, [int]$timeoutSec = 20) {
@@ -76,10 +83,18 @@ function Get-TaskRows {
     if (-not $w) { return @() }
     $list = Find-ById $w 'TaskList'
     if (-not $list) { return @() }
+    # v5 修红：同样弃 FindAll，改 TreeWalker 逐子走查（ControlView），异常只回空数组
     try {
-        $all = @($list.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.AutomationElement]::TrueCondition))
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        $rows = @()
+        $el = $walker.GetFirstChild($list)
+        while ($el) {
+            try { $ct = $el.Current.ControlType } catch { $ct = $null }
+            if ($ct -eq [System.Windows.Automation.ControlType]::ListItem) { $rows += $el }
+            try { $el = $walker.GetNextSibling($el) } catch { break }
+        }
+        return $rows
     } catch { return @() }
-    return @($all | Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem })
 }
 function Test-Enqueued([string]$needle, [int]$timeoutSec = 30) {
     $deadline = (Get-Date).AddSeconds($timeoutSec)
