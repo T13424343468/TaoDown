@@ -113,15 +113,28 @@ try {
             if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "A: 续传进程退出，红灯" }
             Assert-Watchdog $log
             if ((Get-CompleteCount $log "big.bin") -ge 1) { break }
-            $part = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big.bin*" -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -notmatch '\.aria2' } | Measure-Object Length -Sum
-            $cur = [long]($part.Sum)
+            # v7 修红：进度口径改 .aria2 控制文件（记录真实已传输 completedLength）；
+            # 稀疏预分配会让文件大小瞬间=32GB，文件大小当进度=假读数
+            $ctrl = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big.bin.aria2" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $cur = [long]0
+            if ($ctrl) {
+                $b = [System.IO.File]::ReadAllBytes($ctrl.FullName)
+                # aria2 控制文件：offset 8..15 为 totalLength（大端 u64），16..23 为 uploadLength，24..31 为 completedLength（大端 u64）
+                if ($b.Length -ge 32) {
+                    $cur = 0L
+                    for ($k = 24; $k -lt 32; $k++) { $cur = ($cur -shl 8) -bor $b[$k] }
+                }
+            } else {
+                # 控制文件已消失=任务已完成或文件名变化，回落到 Complete 标记判断；里程表照读文件大小兜底
+                $part = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big.bin" -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum
+                $cur = [long]($part.Sum)
+            }
             $left = [int]($deadline - (Get-Date)).TotalMinutes
             if ($prevBytes -ge 0 -and $cur -gt $prevBytes) {
                 $rate = [math]::Round(($cur - $prevBytes) / 1MB / ((Get-Date) - $prevTick).TotalSeconds, 1)
-                Write-Host ("A: 进度 {0:N2} GB / {1} GB，实测 {2} MB/s，剩 {3} 分钟" -f ($cur/1GB), $BigFileSizeGB, $rate, $left)
+                Write-Host ("A: 实传 {0:N2} GB / {1} GB，实测 {2} MB/s，剩 {3} 分钟" -f ($cur/1GB), $BigFileSizeGB, $rate, $left)
             } else {
-                Write-Host ("A: 进度 {0:N2} GB / {1} GB（无推进），剩 {2} 分钟" -f ($cur/1GB), $BigFileSizeGB, $left)
+                Write-Host ("A: 实传 {0:N2} GB / {1} GB（无推进），剩 {2} 分钟" -f ($cur/1GB), $BigFileSizeGB, $left)
             }
             $prevBytes = $cur; $prevTick = Get-Date
         }

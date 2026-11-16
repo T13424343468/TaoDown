@@ -180,6 +180,31 @@ function SnapCase($id, $phase) {
     try { Snap (Join-Path $evd "human-$id-$phase.png") } catch { Write-Host "截图失败 $id-$phase：$($_.Exception.Message)" }
 }
 
+# ---------- v7 新增：UIA 树转储（云机实证行结构，治「看不见所以修不准」）----------
+function Dump-UIATree([string]$tag) {
+    try {
+        $w = Get-MainWindow
+        if (-not $w) { Write-Host "UIATREE $tag 主窗口未找到"; return }
+        $lines = New-Object System.Collections.Generic.List[string]
+        $stack = New-Object System.Collections.Stack
+        $stack.Push(@($w, 0))
+        while ($stack.Count -gt 0 -and $lines.Count -lt 300) {
+            $pair = $stack.Pop(); $el = $pair[0]; $depth = [int]$pair[1]
+            try {
+                $n = $el.Current.Name; $aid = $el.Current.AutomationId; $ct = $el.Current.ControlType
+                $lines.Add(("  " * [Math]::Min($depth, 8)) + "$($ct.ProgrammaticName) id=[$aid] name=[$n]")
+            } catch { }
+            try {
+                $w2 = [System.Windows.Automation.TreeWalker]::RawViewWalker
+                $c = $w2.GetFirstChild($el)
+                while ($c) { $stack.Push(@($c, $depth + 1)); $c = $w2.GetNextSibling($c) }
+            } catch { }
+        }
+        Write-Host "UIATREE $tag 行数=$($lines.Count)"
+        foreach ($l in $lines) { Write-Host "UIATREE $tag | $l" }
+    } catch { Write-Host "UIATREE $tag 转储异常：$($_.Exception.Message)" }
+}
+
 # ---------- 本地真实源（v2：同进程 Runspace，活对象直传，修复死源根因）----------
 $port = 18100
 $buf = New-SrcBuf
@@ -274,6 +299,7 @@ try {
     # v3 修红（run 43793086281）：v2 重写时误删 Start-App，整批对没启动的应用找元素——补回
     $null = Start-App
     SnapCase 'M1' 'before'
+    Dump-UIATree 'M1-before'
     $ok = Set-LinkBox "http://127.0.0.1:$port/m1.bin"
     if (-not $ok) { Record M1 FAIL 'LinkBox/AddButton UIA 未生效' }
     elseif (-not (Test-Enqueued 'm1.bin' 30)) { Record M1 FAIL '任务未入列（TaskList 无行）' }
