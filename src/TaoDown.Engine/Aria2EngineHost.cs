@@ -114,7 +114,41 @@ public sealed class Aria2EngineHost : IDisposable
 
         if (alive)
         {
-            return (new Aria2Client(_options), false);
+            // 2026-11-16 大文件班修红（run 43856930431）：引擎进程活着但 RPC 挂起不响应时，
+            // 只查进程存活会永远拒绝自愈——界面空轮询 35 分钟撞批超时。
+            // 进程在但 RPC 探不活 → 视同死亡，杀进程树后照常重启。
+            var probe = new Aria2Client(_options);
+            try
+            {
+                using var pingCt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                pingCt.CancelAfter(TimeSpan.FromSeconds(3));
+                await probe.GetVersionAsync(pingCt.Token);
+                return (new Aria2Client(_options), false);
+            }
+            catch (Exception)
+            {
+                lock (_gate)
+                {
+                    if (_process is { HasExited: false } hung)
+                    {
+                        try
+                        {
+                            hung.Kill(entireProcessTree: true);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // 进程恰好在杀之前自行退出
+                        }
+                    }
+
+                    _process?.Dispose();
+                    _process = null;
+                }
+            }
+            finally
+            {
+                probe.Dispose();
+            }
         }
 
         var client = await StartAsync(ct);

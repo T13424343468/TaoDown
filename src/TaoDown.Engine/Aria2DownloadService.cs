@@ -625,9 +625,33 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 }
 
-                ApplyStatus(task, status);
+                try
 
-                DetectStall(task);
+                {
+
+                    ApplyStatus(task, status);
+
+                    DetectStall(task);
+
+                }
+
+                catch (Exception applyEx)
+
+                {
+
+                    // 状态已取回但回写/停滞判定抛异常：Updated 在 ApplyStatus 末尾才触发，
+                    // 这里炸了界面就永远收不到更新（真机「正在连接服务器」卡死嫌疑链）。
+                    // 必须与 RPC 失败区分开并落异常类型，空消息也要能定位。
+
+                    if (_diagPolled.Add($"apply:{task.Id}"))
+
+                    {
+
+                        RefreshDiag.Write($"状态回写失败：{applyEx.GetType().Name}: {applyEx.Message} :: {applyEx.StackTrace?.Split('\n')[0]}");
+
+                    }
+
+                }
 
             }
 
@@ -677,7 +701,9 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
                 {
 
-                    RefreshDiag.Write($"TellStatus 失败（连续第 {streak} 次）{gid[..Math.Min(8, gid.Length)]}…：{ex.Message}");
+                    var reason = string.IsNullOrEmpty(ex.Message) ? ex.GetType().Name : ex.Message;
+
+                    RefreshDiag.Write($"TellStatus 失败（连续第 {streak} 次）{gid[..Math.Min(8, gid.Length)]}…：{reason}");
 
                 }
 
