@@ -53,6 +53,26 @@ function Assert-Watchdog($log) {
     }
 }
 
+function Collect-EngineLogs($evd, $dataRoot) {
+    # v8 修红：失败路径先抢救引擎日志（startup.log/engine-main.log/refresh-diag.log），红灯可定谳不再盲猜
+    $logDir = Join-Path $dataRoot "logs"
+    if (-not (Test-Path $logDir)) { Write-Host "引擎日志目录不存在：$logDir"; return }
+    try {
+        New-Item -ItemType Directory -Force -Path (Join-Path $evd "enginelogs") | Out-Null
+        foreach ($name in "startup.log", "engine-main.log", "engine-ftp.log", "refresh-diag.log") {
+            $p = Join-Path $logDir $name
+            if (Test-Path $p) { Copy-Item $p (Join-Path $evd "enginelogs" $name) -Force; Write-Host "引擎日志已抢救：$name" }
+        }
+        foreach ($name in "startup.log", "engine-main.log", "refresh-diag.log") {
+            $p = Join-Path $logDir $name
+            if (Test-Path $p) {
+                Write-Host "===== $name 尾部 ====="
+                Get-Content $p -Tail 200 | ForEach-Object { Write-Host $_ }
+            }
+        }
+    } catch { Write-Host "引擎日志抢救异常：$($_.Exception.Message)" }
+}
+
 # ---------- 起本地稀疏源 ----------
 $port = 18099
 $srv = [System.Net.HttpListener]::new()
@@ -182,6 +202,10 @@ try {
     # 证据归档
     Copy-Item $log (Join-Path $evd "startup.log") -Force
     Write-Host "全部通过：超大文件 32GB + 满列表 $ListCount 并发，证据落 $evd"
+} catch {
+    # v8 修红：红灯时先抢救引擎日志再抛，确保证据包可定谳
+    Collect-EngineLogs $evd $dataRoot
+    throw
 } finally {
     Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force -ErrorAction SilentlyContinue
     try { $srv.Stop(); Start-Sleep -Seconds 2; if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }

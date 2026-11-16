@@ -126,6 +126,13 @@ function Test-Enqueued([string]$needle, [int]$timeoutSec = 30) {
         foreach ($r in (Get-TaskRows)) {
             if ($r.Current.Name -like "*$needle*") { return $true }
         }
+        # v8 修红：行宿主枚举在云机偶发空手而归但任务实际已入列（M2-after 截图实证）——
+        # 兜底从主窗口全树按行名直接搜，命中即算入列，不再让断言误报
+        $w = Get-MainWindow
+        if ($w) {
+            $hits = Find-WalkAll $w { param($e) try { $e.Current.Name -like "*$needle*" } catch { return $false } }
+            if ($hits -and @($hits).Count -gt 0) { return $true }
+        }
         Start-Sleep -Milliseconds 500
     }
     return $false
@@ -273,6 +280,27 @@ function Get-FileSha($path) {
 }
 
 # ---------- 起应用 ----------
+function Collect-EngineLogs($evd, $dataRoot) {
+    # v8 修红：失败路径先抢救引擎日志，红灯可定谳不再盲猜（v13 班口径）
+    $logDir = Join-Path $dataRoot "logs"
+    if (-not (Test-Path $logDir)) { Write-Host "引擎日志目录不存在：$logDir"; return }
+    try {
+        New-Item -ItemType Directory -Force -Path (Join-Path $evd "enginelogs") | Out-Null
+        foreach ($name in "startup.log", "engine-main.log", "engine-ftp.log", "refresh-diag.log") {
+            $p = Join-Path $logDir $name
+            if (Test-Path $p) { Copy-Item $p (Join-Path $evd "enginelogs" $name) -Force; Write-Host "引擎日志已抢救：$name" }
+        }
+        # 各日志尾部 200 行直接打到输出，证据包直接可读
+        foreach ($name in "startup.log", "engine-main.log", "refresh-diag.log") {
+            $p = Join-Path $logDir $name
+            if (Test-Path $p) {
+                Write-Host "===== $name 尾部 ====="
+                Get-Content $p -Tail 200 | ForEach-Object { Write-Host $_ }
+            }
+        }
+    } catch { Write-Host "引擎日志抢救异常：$($_.Exception.Message)" }
+}
+
 function Find-AppExe {
     $regKey = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
@@ -463,6 +491,8 @@ catch {
     $trace = ''
     try { $trace = $_.Exception.ScriptStackTrace } catch { }
     Record 'ABORT' FAIL "用例批中断于第 $($script:Ledger.Count + 1) 条前后：$($_.Exception.Message) @(抛点:$trace)"
+    # v8 修红：中断时先抢救引擎日志（下轮红灯不再盲猜）
+    Collect-EngineLogs $evd $dataRoot
 }
 finally {
     # ===== 汇总 =====

@@ -113,10 +113,11 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         };
 
-        // 代理只跟 HTTP(S)/FTP 走：BT/ED2K 走代理反而拖累 DHT/节点发现
-
-        if ((kind == LinkKind.Http || kind == LinkKind.Ftp) && !string.IsNullOrWhiteSpace(AllProxy))
-
+        // 代理只跟 HTTP(S)/FTP 走：BT/ED2K 走代理反而拖累 DHT/节点发现；
+        // 本地源（回环/私网/单标签主机名）豁免代理直连——跟随系统代理后本地请求被送进
+        // 不可用代理会卡「正在连接服务器」0 B（云批实证），语义对齐浏览器「跳过本地地址」
+        if ((kind == LinkKind.Http || kind == LinkKind.Ftp) && !string.IsNullOrWhiteSpace(AllProxy)
+            && !ProxyBypass.ShouldBypass(task.Url))
         {
 
             downloadOptions["all-proxy"] = AllProxy;
