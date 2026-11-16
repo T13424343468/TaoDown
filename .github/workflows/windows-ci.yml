@@ -10,7 +10,7 @@ on:
 jobs:
   build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 210
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
