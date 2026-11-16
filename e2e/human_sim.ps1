@@ -22,13 +22,44 @@ function Record($id, $verdict, $note = '') { $script:Ledger[$id] = "$verdict $no
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
 
 # ---------- UIA 驱动 ----------
+# v6 修红（run 43806485720）：云机 WinUI 上 PropertyCondition 的 FindFirst 不抛错而是安静返回空——
+# v4/v5 只堵了 Get-TaskRows 一处，Find-ByName/Find-ById 仍走独木桥，13 个用例点不到控件全栽这里。
+# 一律改「快捷通道 + RawViewWalker 递归兜底」双轨：快捷通道命中就用，空手而归时递归走查。
+function Find-WalkAll($root, [scriptblock]$pred) {
+    $out = @()
+    if (-not $root) { return ,$out }
+    $stack = New-Object System.Collections.Stack
+    try {
+        $w = [System.Windows.Automation.TreeWalker]::RawViewWalker
+        $child = $w.GetFirstChild($root)
+        while ($child) { $stack.Push($child); $child = $w.GetNextSibling($child) }
+    } catch { return ,$out }
+    while ($stack.Count -gt 0) {
+        $el = $stack.Pop()
+        try { if (& $pred $el) { $out += $el } } catch { }
+        try {
+            $w = [System.Windows.Automation.TreeWalker]::RawViewWalker
+            $c = $w.GetFirstChild($el)
+            while ($c) { $stack.Push($c); $c = $w.GetNextSibling($c) }
+        } catch { }
+    }
+    return ,$out
+}
 function Find-ByName([System.Windows.Automation.AutomationElement]$root, [string]$name) {
-    return $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)))
+    try {
+        $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+        $hit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
+        if ($hit) { return $hit }
+    } catch { }
+    return Find-WalkAll $root { param($e) try { $e.Current.Name -eq $name } catch { return $false } } | Select-Object -First 1
 }
 function Find-ById($root, [string]$id) {
-    return $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)))
+    try {
+        $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+        $hit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
+        if ($hit) { return $hit }
+    } catch { }
+    return Find-WalkAll $root { param($e) try { $e.Current.AutomationId -eq $id } catch { return $false } } | Select-Object -First 1
 }
 function Get-MainWindow {
     # 主窗标题固定「TaoDown x.y.z」；询问窗/引导窗标题不同，不会误中
@@ -83,17 +114,10 @@ function Get-TaskRows {
     if (-not $w) { return @() }
     $list = Find-ById $w 'TaskList'
     if (-not $list) { return @() }
-    # v5 修红：同样弃 FindAll，改 TreeWalker 逐子走查（ControlView），异常只回空数组
+    # v6 修红：行宿主可能嵌在中间容器层（ScrollViewer/ItemsPresenter 等），逐子直查触不到——
+    # 改递归收集全部 ListItem（RawView 兜底），全程 try/catch 异常只回空数组
     try {
-        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-        $rows = @()
-        $el = $walker.GetFirstChild($list)
-        while ($el) {
-            try { $ct = $el.Current.ControlType } catch { $ct = $null }
-            if ($ct -eq [System.Windows.Automation.ControlType]::ListItem) { $rows += $el }
-            try { $el = $walker.GetNextSibling($el) } catch { break }
-        }
-        return $rows
+        return @(Find-WalkAll $list { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })
     } catch { return @() }
 }
 function Test-Enqueued([string]$needle, [int]$timeoutSec = 30) {

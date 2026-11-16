@@ -104,14 +104,30 @@ try {
     Start-Process $appExe -ArgumentList "`"http://127.0.0.1:$port/big.bin`""
     if (-not $SkipResume) {
         # 断言续传：重启后 CompletedBytes 不从零（日志可查），等待完成
-        $deadline = (Get-Date).AddMinutes(40)
+        # v6 修红：加落盘里程表（每分钟报进度和实时速率），红灯时不再两眼一抹黑；预算放宽到 60 分钟
+        $deadline = (Get-Date).AddMinutes(60)
+        $prevBytes = [long]-1
+        $prevTick = Get-Date
         while ((Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 60
             if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "A: 续传进程退出，红灯" }
             Assert-Watchdog $log
             if ((Get-CompleteCount $log "big.bin") -ge 1) { break }
+            $part = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big.bin*" -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\.aria2' } | Measure-Object Length -Sum
+            $cur = [long]($part.Sum)
+            $left = [int]($deadline - (Get-Date)).TotalMinutes
+            if ($prevBytes -ge 0 -and $cur -gt $prevBytes) {
+                $rate = [math]::Round(($cur - $prevBytes) / 1MB / ((Get-Date) - $prevTick).TotalSeconds, 1)
+                Write-Host ("A: 进度 {0:N2} GB / {1} GB，实测 {2} MB/s，剩 {3} 分钟" -f ($cur/1GB), $BigFileSizeGB, $rate, $left)
+            } else {
+                Write-Host ("A: 进度 {0:N2} GB / {1} GB（无推进），剩 {2} 分钟" -f ($cur/1GB), $BigFileSizeGB, $left)
+            }
+            $prevBytes = $cur; $prevTick = Get-Date
         }
-        if ((Get-CompleteCount $log "big.bin") -lt 1) { throw "A: 40 分钟内 32GB 文件未到 Complete，红灯" }
+        if ((Get-CompleteCount $log "big.bin") -lt 1) {
+            throw "A: 60 分钟内 32GB 文件未到 Complete，红灯（最后进度 $([math]::Round($prevBytes/1GB,2)) GB）"
+        }
         $bigFile = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads") -Filter "big.bin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $bigFile) { throw "A: 找不到落盘 big.bin" }
         if ($bigFile.Length -ne $bigLen) { throw "A: 落盘 $([int64]$bigFile.Length) 字节 != ContentLength $bigLen，红灯" }
@@ -138,7 +154,9 @@ try {
         Assert-Watchdog $log
         $done = 0
         for ($i = 1; $i -le $ListCount; $i++) { $done += [int]((Get-CompleteCount $log "file$i.bin") -gt 0) }
-        Write-Host "B: $done/$ListCount Complete"
+        $part = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "file*.bin*" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\.aria2' } | Measure-Object Length -Sum
+        Write-Host ("B: {0}/{1} Complete，已落盘 {2:N1} GB / {3} GB" -f $done, $ListCount, ($part.Sum/1GB), ($ListCount*0.5))
         if ($done -ge $ListCount) { break }
     }
     $done = 0
