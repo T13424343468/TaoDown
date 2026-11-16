@@ -288,7 +288,10 @@ jobs:
             if ($slow) { throw "下载高峰界面响应不达标：$($slow.Line)" }
           }
           Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          $srcPs.Stop(); $srcRs.Close()
+          # 修红（run 43739133787 归因）：Runspace 线程堵在 GetContext 等下一请求，直接 Stop 互相等死锁——
+          # 必须先关监听让 GetContext 解除阻塞，线程退出后清理才回得来
+          $srv.Stop(); Start-Sleep -Seconds 2
+          try { $srcPs.Stop(); $srcRs.Close() } catch { }
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
       - name: 真人模拟 24 用例云批（UIA 真界面驱动 + 真源 SHA 对账）

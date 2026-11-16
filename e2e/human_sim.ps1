@@ -401,6 +401,6 @@ finally {
         Snap (Join-Path $evd 'human-final.png')
     } catch { Write-Host "截图失败：$($_.Exception.Message)" }
     Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    try { if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }
+    try { $srv.Stop(); Start-Sleep -Seconds 2; if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }
     if ($fail -gt 0) { throw "真人模拟云批红灯：$fail 条 FAIL（明细见上）" }
 }

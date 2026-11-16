@@ -85,7 +85,7 @@ $srcPs.Runspace = $srcRs
 $srcHandle = $srcPs.BeginInvoke()
 
 $appExe = Find-AppExe
-if (-not $appExe) { try { $srcPs.Stop(); $srcRs.Close() } catch { }; throw "找不到已安装的 TaoDown.exe" }
+if (-not $appExe) { try { $srv.Stop(); Start-Sleep -Seconds 2; $srcPs.Stop(); $srcRs.Close() } catch { }; throw "找不到已安装的 TaoDown.exe" }
 $dataRoot = Find-DataRoot
 $log = Join-Path $dataRoot "logs\startup.log"
 $evd = Join-Path $PSScriptRoot "..\evidence\bigfile"
@@ -153,6 +153,6 @@ try {
     Write-Host "全部通过：超大文件 32GB + 满列表 $ListCount 并发，证据落 $evd"
 } finally {
     Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force -ErrorAction SilentlyContinue
-    try { if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }
+    try { $srv.Stop(); Start-Sleep -Seconds 2; if ($srcPs) { $srcPs.Stop() }; if ($srcRs) { $srcRs.Close() } } catch { }
     $srv.Stop()
 }
