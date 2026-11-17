@@ -133,6 +133,17 @@ Start-Sleep -Seconds 2
 Get-ChildItem $dataRoot -Filter "*.json" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'task|snapshot' } | Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big*.bin*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+# 2026-11-18 自检自防（公开资料回灌）：runner 系统分区可用空间有限（约 20-30GB），
+# aria2 磁盘满报 exit code 9，但大文件测试半途爆盘会污染断言且难归因。开跑前先断言余量，
+# 不达标即红灯给出明确原因（清场后估算：32G 大文件 + 40 列表并发 + 快照/日志 ≈ 2.5 倍体量）。
+$requiredGB = [math]::Ceiling($BigFileSizeGB * 2.5)
+$dataDrive = (Get-Item $dataRoot).PSDrive
+$freeGB = [math]::Round($dataDrive.Free / 1GB, 1)
+if ($freeGB -lt $requiredGB) {
+    throw "磁盘余量不足（盘 $($dataDrive.Name): 空闲 ${freeGB}GB < 需要 ${requiredGB}GB），不启动大文件回归，避免 aria2 exit code 9 磁盘满污染断言"
+}
+Write-Host "磁盘余量检查通过（盘 $($dataDrive.Name): 空闲 ${freeGB}GB >= 需要 ${requiredGB}GB）"
+
 $log = Join-Path $dataRoot "logs\startup.log"
 $evd = Join-Path $PSScriptRoot "..\evidence\bigfile"
 New-Item -ItemType Directory -Force -Path $evd | Out-Null
