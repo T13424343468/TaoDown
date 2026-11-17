@@ -1,9 +1,19 @@
-﻿name: windows-ci
+name: windows-ci
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: '测试场景：full=整场全链路（默认，收口/推送用）；human=修红迭代短场（跳过 32GB 大文件回归与 30 分钟长稳浸泡）；bigfile=只跑大文件回归'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - human
+          - bigfile
   schedule:
     - cron: '30 18 * * *'
 
@@ -11,7 +21,15 @@ jobs:
   build-and-test:
     runs-on: windows-latest
     timeout-minutes: 210
+    # 修红迭代短场/收口整场制度（2026-11-17 老板令）：push/定时一律整场；
+    # 手动派发可选场景——修红迭代期只跑真人模拟省一半场时，全绿收口再跑整场终验
+    env:
+      SCENARIO: ${{ inputs.scenario || 'full' }}
     steps:
+      - name: 场景选择
+        shell: pwsh
+        run: Write-Host "测试场景: $env:SCENARIO"
+
       - name: 检出代码
         uses: actions/checkout@v4
 
@@ -196,8 +214,8 @@ jobs:
           Snap "evidence\l8-reinstall.png"
           Write-Host "升级与回滚路径：覆盖安装、静默卸载、重装均通过"
 
-      - name: 长稳浸泡 30 分钟（自动班：定时/手动触发）
-        if: github.event_name != 'push'
+      - name: 长稳浸泡 30 分钟（自动班：定时/整场手动触发）
+        if: github.event_name != 'push' && env.SCENARIO == 'full'
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Windows.Forms
@@ -295,12 +313,15 @@ jobs:
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
       - name: 真人模拟 24 用例云批（UIA 真界面驱动 + 真源 SHA 对账）
+        if: env.SCENARIO != 'bigfile'
         shell: pwsh
         run: |
           pwsh -File e2e/human_sim.ps1
 
       - name: 超大文件+满列表并发回归（32GB 断点续传 + 40 任务并发 + 崩溃恢复）
-        if: always()   # v4 修红：真人模拟红灯不再连带跳过大文件闸，两闸各自暴露问题
+        # always() 保留 v4 修红口径：同场时真人模拟红灯不连带跳过大文件闸，两闸各自暴露问题；
+        # 短场（human）整段跳过，收口整场时恢复同场双闸
+        if: always() && env.SCENARIO != 'human'
         shell: pwsh
         run: |
           pwsh -File e2e/bigfile_regression.ps1 -BigFileSizeGB 32 -ListCount 40
