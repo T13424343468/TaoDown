@@ -220,6 +220,15 @@ public sealed partial class DownloadsPage : Page, IThemeRepaintable
             link = resolved;
         }
 
+        // 修红（run 44061254563 M16 实锤）：同一链接重复粘贴会建出多个真实下载任务、
+        // 完成态弹多次——未失败的既有任务直接复用，不再重复添加；失败的旧任务允许重试。
+        var duplicate = DuplicateLinkGuard.FindDuplicate(App.Downloads!.TasksSnapshot, link);
+        if (duplicate is not null)
+        {
+            PageStatus.Text = "该链接已在下载列表中，未重复添加。";
+            return;
+        }
+
         try
         {
             var task = new DownloadTask { Url = link, Kind = kind, SaveDir = App.EngineHost!.Options.DownloadDir };

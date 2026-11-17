@@ -128,7 +128,9 @@ $dataRoot = Find-DataRoot
 # 还有孤儿 aria2c 子进程占着 RPC 端口。开跑前一律清场。
 Get-Process TaoDown, aria2c, aria2-next -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-Get-ChildItem $dataRoot -Filter "*.json" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'task|snapshot' } | Remove-Item -Force -ErrorAction SilentlyContinue
+# 修红（run 44061254563 M3 实锤）：tasks.json/snapshot 在 state\ 子目录，非递归删不到，
+# 看门狗遗留的 18099/big.bin 从快照复活——清场必须 -Recurse
+Get-ChildItem $dataRoot -Filter "*.json" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'task|snapshot' } | Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big*.bin*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 $log = Join-Path $dataRoot "logs\startup.log"

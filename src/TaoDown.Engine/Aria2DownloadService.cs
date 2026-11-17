@@ -130,6 +130,29 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
+        // 修红（run 44061254563 M18 实锤）：源头给 156 字符中文名时 aria2 引擎原生按 UTF-16
+        // 字节截断成 82 字符落盘——提交前先探一次 Content-Disposition，拿到真实文件名就用
+        // out 显式指定，绕开引擎截断；探不到（无头/探测失败）维持引擎默认命名，绝不挡提交。
+        if (kind == LinkKind.Http)
+        {
+            try
+            {
+                var probeProxy = (kind == LinkKind.Http || kind == LinkKind.Ftp) && !string.IsNullOrWhiteSpace(AllProxy)
+                    && !ProxyBypass.ShouldBypass(task.Url)
+                    ? AllProxy
+                    : null;
+                var outName = await ContentDispositionName.ResolveOutAsync(task.Url, probeProxy, ct);
+                if (!string.IsNullOrWhiteSpace(outName))
+                {
+                    downloadOptions["out"] = outName;
+                }
+            }
+            catch
+            {
+                // 探测任何异常都不挡提交
+            }
+        }
+
         string gid;
         try
         {
@@ -563,11 +586,47 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         {
 
+            List<string> dangling;
+
             lock (_gate)
 
             {
 
-                snapshot = [.. _gidToTaskId.Select(kv => (kv.Key, _tasks[kv.Value]))];
+                snapshot = [];
+
+                dangling = [];
+
+                // 修红（run 44061254563 大文件 B 段实锤）：映射与任务表偶发不一致时
+                // 直接索引炸 KeyNotFoundException，0.8 秒一次刷屏且整轮轮询全废——
+                // 改为跳过未知 taskId 并顺手清掉悬空 gid 映射，自愈而非带病上抛。
+                foreach (var kv in _gidToTaskId)
+
+                {
+
+                    if (_tasks.TryGetValue(kv.Value, out var t))
+
+                    {
+
+                        snapshot.Add((kv.Key, t));
+
+                    }
+                    else
+                    {
+                        dangling.Add(kv.Key);
+                    }
+                }
+
+                foreach (var gid in dangling)
+
+                {
+
+                    RefreshDiag.Write($"轮询快照构建跳过悬空 gid：{gid[..Math.Min(8, gid.Length)]}…（taskId={_gidToTaskId[gid]} 不在任务表，映射随手清理）");
+
+                    _gidToTaskId.Remove(gid);
+
+                    _gidToClient.Remove(gid);
+
+                }
 
             }
 

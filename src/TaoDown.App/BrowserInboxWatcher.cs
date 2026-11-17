@@ -268,6 +268,15 @@ public sealed class BrowserInboxWatcher : IDisposable
                 link = resolved;
                 kind = LinkClassifier.Classify(link);
             }
+            // 修红（run 44061254563 M16 实锤）：同一链接重复接管/重复添加不再建重复下载任务，
+            // 未失败的既有任务直接复用；失败的旧任务允许重试。
+            var duplicate = DuplicateLinkGuard.FindDuplicate(App.Downloads!.TasksSnapshot, link);
+            if (duplicate is not null)
+            {
+                StartupLog.Write("接管链接已在下载列表中，未重复添加：" + link);
+                return;
+            }
+
             var task = new DownloadTask
             {
                 Url = link,
