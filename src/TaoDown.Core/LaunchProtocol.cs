@@ -60,10 +60,27 @@ public static class LaunchArgs
 /// </summary>
 public static class LaunchForward
 {
-    /// <summary>收件文件路径（可传目录便于测试；默认走应用数据根目录）。</summary>
+    /// <summary>旧版单文件收件路径（兼容清理用；可传目录便于测试）。</summary>
     public static string FilePath(string? dir = null)
     {
         return Path.Combine(dir ?? DataRoot.Root(), "launch-forward.txt");
+    }
+
+    private static string PendingDir(string? dir) => dir ?? DataRoot.Root();
+
+    // 同毫秒内多次 Write 的时间戳相同，序号保证文件名按写入顺序单调递增，TryRead 按到达顺序处理
+    private static long _seq;
+
+    private static IEnumerable<string> PendingFiles(string? dir)
+    {
+        var root = PendingDir(dir);
+        if (!Directory.Exists(root))
+        {
+            return [];
+        }
+
+        // 每个载荷独立文件（launch-forward-<时间戳>-<guid>.txt）；旧版单文件 launch-forward.txt 兼容读取
+        return Directory.EnumerateFiles(root, "launch-forward*.txt");
     }
 
     public static void Write(LaunchPayload payload, string? dir = null)
@@ -76,49 +93,59 @@ public static class LaunchForward
             return;
         }
 
-        var path = FilePath(dir);
+        // 修红（run 44071283035 大文件 B 段实锤）：旧版单文件覆盖写——二次实例 A 写完、
+        // 主实例 UI 线程忙还没来得及读，二次实例 B 又覆盖同一个文件，A 的载荷永久丢失
+        //（40 连发丢 10 个，30/40 终态红灯）。改每载荷独立文件，永不互相覆盖；
+        // 主实例 TryRead 枚举读全部，晚到的载荷等下一轮处理，一个都不丢。
+        var seq = System.Threading.Interlocked.Increment(ref _seq);
+        var path = Path.Combine(
+            PendingDir(dir),
+            $"launch-forward-{DateTime.Now:yyyyMMddHHmmssfff}-{seq:D10}-{Guid.NewGuid():N}.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, string.Join(Environment.NewLine, lines) + Environment.NewLine);
-        File.Move(temp, path, overwrite: true);
+        File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
     }
 
-    /// <summary>读取并清空收件文件；无内容或解析失败返回空载荷。</summary>
+    /// <summary>读取全部收件文件（按文件名时间戳排序）并逐个清空；无内容或解析失败按空载荷处理。</summary>
     public static LaunchPayload TryRead(string? dir = null)
     {
         var payload = new LaunchPayload();
         try
         {
-            var path = FilePath(dir);
-            if (!File.Exists(path))
+            foreach (var path in PendingFiles(dir).OrderBy(f => f, StringComparer.Ordinal))
             {
-                return payload;
-            }
+                try
+                {
+                    foreach (var line in File.ReadAllLines(path))
+                    {
+                        var parts = line.Split('\t', 2);
+                        if (parts.Length != 2)
+                        {
+                            continue;
+                        }
 
-            foreach (var line in File.ReadAllLines(path))
-            {
-                var parts = line.Split('\t', 2);
-                if (parts.Length != 2)
-                {
-                    continue;
-                }
+                        if (parts[0] == "L" && parts[1].Length > 0 && !payload.Links.Contains(parts[1]))
+                        {
+                            payload.Links.Add(parts[1]);
+                        }
+                        else if (parts[0] == "T" && parts[1].Length > 0 && !payload.TorrentFiles.Contains(parts[1]))
+                        {
+                            payload.TorrentFiles.Add(parts[1]);
+                        }
+                    }
 
-                if (parts[0] == "L" && parts[1].Length > 0)
-                {
-                    payload.Links.Add(parts[1]);
+                    File.Delete(path);
                 }
-                else if (parts[0] == "T" && parts[1].Length > 0)
+                catch (Exception)
                 {
-                    payload.TorrentFiles.Add(parts[1]);
+                    // 单个收件文件损坏/被并发删除：跳过，不拖累其余载荷
                 }
             }
         }
         catch (Exception)
         {
-            // 收件文件损坏：当作空处理，不阻断主实例
+            // 收件目录不可读：当作空处理，不阻断主实例
         }
 
-        Clear(dir);
         return payload;
     }
 
@@ -126,11 +153,12 @@ public static class LaunchForward
     {
         try
         {
+            // 旧版单文件兜底删除；新版收件清理由 TryRead 逐文件完成
             File.Delete(FilePath(dir));
         }
         catch (Exception)
         {
-            // 删除失败留给下次覆盖写，不影响功能
+            // 删除失败不影响功能
         }
     }
 }

@@ -491,7 +491,12 @@ public partial class App : Application
         Interlocked.Exchange(ref _lastReviveTicks, now);
         try
         {
-            if (EngineHost is not null && Downloads is not null && Downloads.MainRpcFailStreak >= 5)
+            // 修红（run 44071283035 M9 实锤）：旧口径要求连击攒满 5 次才自愈——FTP 引擎名下
+            // 无任务轮询时唯一信号就是提交失败，5 连败×60 秒慢速重试要 3 分钟才触发重启，
+            // M9 的 180 秒断言窗口早已耗尽。EnsureRunningAsync 内部自会探测：进程死→重启、
+            // 进程在但 RPC 挂→杀掉重启、都正常→原样返回，提交失败即探测是安全且最快的自愈路径
+            //（15 秒节流保留，防连环失败刷重启）。
+            if (EngineHost is not null && Downloads is not null)
             {
                 var (client, restarted) = await EngineHost.EnsureRunningAsync();
                 if (restarted)
@@ -506,7 +511,7 @@ public partial class App : Application
                 }
             }
 
-            if (FtpEngineHost is not null && Downloads is not null && Downloads.FtpRpcFailStreak >= 5)
+            if (FtpEngineHost is not null && Downloads is not null)
             {
                 var (client, restarted) = await FtpEngineHost.EnsureRunningAsync();
                 if (restarted)

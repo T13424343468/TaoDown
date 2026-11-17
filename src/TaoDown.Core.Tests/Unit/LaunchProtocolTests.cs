@@ -65,15 +65,69 @@ public class LaunchForwardTests
             payload.Links.Add("magnet:?xt=urn:btih:abc");
             payload.TorrentFiles.Add(@"D:\种子\demo.torrent");
             LaunchForward.Write(payload, dir);
-            Assert.True(File.Exists(LaunchForward.FilePath(dir)));
+            // 多文件模式：写入即生成 launch-forward-*.txt 独立收件文件
+            Assert.Contains(
+                Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "launch-forward*.txt") : [],
+                f => f.EndsWith(".txt", StringComparison.Ordinal));
 
             var read = LaunchForward.TryRead(dir);
             Assert.Equal(["magnet:?xt=urn:btih:abc"], read.Links);
             Assert.Equal([@"D:\种子\demo.torrent"], read.TorrentFiles);
-            Assert.False(File.Exists(LaunchForward.FilePath(dir)));
+            Assert.Empty(Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "launch-forward*.txt") : []);
 
             // 空转发不写文件
             LaunchForward.Write(new LaunchPayload(), dir);
+            Assert.Empty(Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "launch-forward*.txt") : []);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
+    // 修红回归（run 44071283035 大文件 B 段 30/40 实锤）：旧版单文件覆盖写——
+    // 二次实例 A 写完、主实例还没读，二次实例 B 又覆盖同一文件，A 的载荷永久丢失。
+    // 本用例在旧实现下必丢一个载荷（B 覆盖 A），新实现两次 Write 独立文件、TryRead 一次读回两个。
+    [Fact]
+    public void Write_Twice_WithoutRead_TryRead_ReturnsBothPayloads()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "taodown-fwd-race-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var first = new LaunchPayload();
+            first.Links.Add("magnet:?xt=urn:btih:first");
+            var second = new LaunchPayload();
+            second.Links.Add("magnet:?xt=urn:btih:second");
+
+            LaunchForward.Write(first, dir);
+            LaunchForward.Write(second, dir); // 不读取，模拟主实例 UI 线程延迟
+
+            var read = LaunchForward.TryRead(dir);
+            Assert.Equal(["magnet:?xt=urn:btih:first", "magnet:?xt=urn:btih:second"], read.Links);
+            Assert.Empty(Directory.EnumerateFiles(dir, "launch-forward*.txt"));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
+    // 旧版单文件 launch-forward.txt 兼容：升级后残留的旧收件文件仍能读回并清理
+    [Fact]
+    public void TryRead_LegacySingleFile_IsStillRead()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "taodown-fwd-legacy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                LaunchForward.FilePath(dir),
+                "L\tmagnet:?xt=urn:btih:legacy" + Environment.NewLine +
+                "T\tD:\\种子\\old.torrent" + Environment.NewLine);
+
+            var read = LaunchForward.TryRead(dir);
+            Assert.Equal(["magnet:?xt=urn:btih:legacy"], read.Links);
+            Assert.Equal(["D:\\种子\\old.torrent"], read.TorrentFiles);
             Assert.False(File.Exists(LaunchForward.FilePath(dir)));
         }
         finally

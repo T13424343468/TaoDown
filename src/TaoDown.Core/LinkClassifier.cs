@@ -48,6 +48,9 @@ public static class LinkClassifier
         ".iso", ".img", ".apk", ".dmg", ".pkg", ".cab", ".deb", ".rpm", ".jar",
         ".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".mp3", ".flac", ".wav", ".ape",
         ".pdf", ".epub", ".mobi", ".torrent",
+        // 修红（run 44071283035 M3 实锤）：.bin 是大文件分发的常见直链扩展名（固件/测试包/数据镜像），
+        // 缺了它剪贴板复制的 .bin 直链被当网页静默忽略，询问窗不弹——M3 三轮全灭的真根因
+        ".bin",
     };
 
     /// <summary>是否「像直接下载的文件」（v2.60）：磁力/电驴/迅雷/FTP 一律算；

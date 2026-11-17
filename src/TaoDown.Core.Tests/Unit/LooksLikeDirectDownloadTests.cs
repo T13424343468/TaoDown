@@ -13,6 +13,7 @@ public class LooksLikeDirectDownloadTests
     [InlineData("ftp://example.com/file.zip")]
     [InlineData("https://example.com/downloads/QQPCDownload310222.exe")]
     [InlineData("https://example.com/pack/Film.2026.mkv")]
+    [InlineData("http://127.0.0.1:18100/m3.bin")]
     [InlineData("https://oss.example.com/a/b.zip?response-content-disposition=attachment%3Bfilename%3Dapp.apk")]
     [InlineData("https://example.com/get?filename=installer.exe&token=x")]
     public void DownloadLikeLinks_AreTrue(string url) =>

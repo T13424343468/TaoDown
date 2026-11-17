@@ -644,7 +644,19 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-        RefreshDiag.Heartbeat(snapshot.Count);
+        // 修红（run 44071283035 大文件 B 段复盘）：心跳原样报快照总数（含终态），
+        // 22 个已完成的任务让「待刷新任务 22 个」静止 30 分钟，把排查引向不存在的队列卡死。
+        // 改报真实非终态数：心跳数字归零才是排空。
+        var pendingRefresh = 0;
+        foreach (var (gid, task) in snapshot)
+        {
+            if (task.Status is not (DownloadStatus.Complete or DownloadStatus.Error))
+            {
+                pendingRefresh++;
+            }
+        }
+
+        RefreshDiag.Heartbeat(pendingRefresh);
 
         foreach (var (gid, task) in snapshot)
 
