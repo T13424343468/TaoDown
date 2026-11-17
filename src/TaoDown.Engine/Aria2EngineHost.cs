@@ -43,6 +43,11 @@ public sealed class Aria2EngineHost : IDisposable
         $" --dir=\"{options.DownloadDir}\" --continue=true" +
         $" --max-connection-per-server={options.MaxConnectionsPerServer} --split={options.Split}" +
         $" --min-split-size=1M --file-allocation=none" +
+        // v1.0.12 修红（云批 44042676045 实锤）：aria2 内部并发默认 5，死源遗留任务的重试
+        // 循环把内部槽位占满后，新任务 addUri 成功却不启动（引擎内无限排队），
+        // 界面显示下载中但引擎零连接（真人模拟 M12~M18 三轮全灭的第三层病根）。
+        // 应用层 DownloadQueue 才是唯一并发闸，引擎内部并发放宽到 32 消除双重闸门。
+        $" --max-concurrent-downloads=32" +
         $" --log=\"{options.LogPath}\" --log-level=info" +
         $" --connect-timeout=15 --timeout=60 --max-tries=5 --retry-wait=2" +
         // 浏览器标准 UA：个别 CDN 对 aria2 默认 UA 有差别对待（限流/拒绝），统一伪装规避

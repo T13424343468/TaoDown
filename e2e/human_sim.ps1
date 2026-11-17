@@ -318,6 +318,14 @@ function Start-App { Start-Process $script:appExe; Start-Sleep -Seconds 10; $nul
 $appExe = Find-AppExe
 $dataRoot = foreach ($p in "D:\TaoDownData\TaoDown", "$env:USERPROFILE\TaoDownData\TaoDown") { if (Test-Path $p) { $p; break } }
 $log = Join-Path $dataRoot "logs\startup.log"
+
+# v1.0.12 环境隔离（云批 44042676045 实锤）：看门狗闸步骤遗留的 18099/big.bin 任务
+# 源已死，从快照复活后永远卡「正在连接服务器」占着引擎内部并发槽，
+# M12~M18 的新任务在引擎里无限排队零连接（三轮全灭的第三层病根）。开跑前清场。
+Get-Process TaoDown, aria2c, aria2-next -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Get-ChildItem $dataRoot -Filter "*.json" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'task|snapshot' } | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big*.bin*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 # v3 修红：证据目录锚到脚本所在仓（CI 产物只收仓内 evidence/**），相对 cwd 写到仓外会被上传步骤漏掉
 New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "..\evidence\human") | Out-Null
 $evd = (Resolve-Path (Join-Path $PSScriptRoot "..\evidence\human")).Path

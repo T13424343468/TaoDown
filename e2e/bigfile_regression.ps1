@@ -63,6 +63,21 @@ function Collect-EngineLogs($evd, $dataRoot) {
             $p = Join-Path $logDir $name
             if (Test-Path $p) { Copy-Item $p (Join-Path $evd "enginelogs" $name) -Force; Write-Host "引擎日志已抢救：$name" }
         }
+        # v1.0.12 黑匣子：进程无声退出时，事件日志与 WER dump 是唯一现场
+        try {
+            $evts = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddHours(-2) } -ErrorAction SilentlyContinue |
+                Where-Object { $_.ProviderName -in 'Application Error', '.NET Runtime', 'Windows Error Reporting' } |
+                Select-Object -First 20
+            $evts | ForEach-Object { "[$($_.TimeCreated)] [$($_.ProviderName)] $($_.Message)`n" } |
+                Set-Content (Join-Path $evd "enginelogs\crash-events.txt")
+            if ($evts) { Write-Host "事件日志已抢救：$($evts.Count) 条（crash-events.txt）" }
+        } catch { Write-Host "事件日志抢救异常：$($_.Exception.Message)" }
+        $dumpDir = Join-Path $env:LOCALAPPDATA "TaoDown\dumps"
+        if (Test-Path $dumpDir) {
+            Get-ChildItem $dumpDir -Filter "*.dmp" -ErrorAction SilentlyContinue | Select-Object -First 5 |
+                ForEach-Object { Copy-Item $_.FullName (Join-Path $evd "enginelogs") -Force }
+            Write-Host "崩溃转储已抢救（如有）"
+        }
         foreach ($name in "startup.log", "engine-main.log", "refresh-diag.log") {
             $p = Join-Path $logDir $name
             if (Test-Path $p) {
@@ -107,6 +122,15 @@ $srcHandle = $srcPs.BeginInvoke()
 $appExe = Find-AppExe
 if (-not $appExe) { try { $srv.Stop(); Start-Sleep -Seconds 2; $srcPs.Stop(); $srcRs.Close() } catch { }; throw "找不到已安装的 TaoDown.exe" }
 $dataRoot = Find-DataRoot
+
+# v1.0.12 环境隔离（云批 44042676045 实锤）：上一个步骤遗留的死源任务（看门狗闸的
+# 18099/big.bin、真人模拟的 18100/m*）会从快照复活，重试循环污染本轮断言；
+# 还有孤儿 aria2c 子进程占着 RPC 端口。开跑前一律清场。
+Get-Process TaoDown, aria2c, aria2-next -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Get-ChildItem $dataRoot -Filter "*.json" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'task|snapshot' } | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem (Join-Path $dataRoot "downloads"), $dataRoot -Filter "big*.bin*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
 $log = Join-Path $dataRoot "logs\startup.log"
 $evd = Join-Path $PSScriptRoot "..\evidence\bigfile"
 New-Item -ItemType Directory -Force -Path $evd | Out-Null
@@ -177,6 +201,9 @@ try {
     Snap (Join-Path $evd "B-concurrent-peak.png")
     if (-not $SkipResume) {
         Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force
+        # v1.0.12 修红：强杀是异步终止，旧实例的互斥体/端口/子进程清理需要几秒；
+        # 立即重启会让新实例在初始化最早期无声退出（云批 44042676045 实锤，B 段零日志红灯）
+        Start-Sleep -Seconds 5
         Write-Host "B: 满列表并发推进 90 秒后强制崩溃（快照恢复口径）。"
         Start-Process $appExe
     }

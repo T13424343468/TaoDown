@@ -40,9 +40,19 @@ public partial class App : Application
 
     public App()
     {
-        InitializeComponent();
-        StartupLog.Write("应用构造完成");
-        // 界面线程未处理异常：记录后不闪退，交给用户重启
+        // 黑匣子第一笔：构造函数之前（XAML 装载）崩溃时也要有进程级现场
+        //（云批 44042676045 实锤：并发恢复进程重启后无声退出，零日志无法定谳）
+        try
+        {
+            StartupLog.Write($"进程启动 pid={Environment.ProcessId} cmd={Environment.CommandLine}");
+            EnableCrashDumps();
+        }
+        catch
+        {
+            // 黑匣子自身失败不影响启动
+        }
+
+        // 异常钩子前置：XAML 装载期异常也要落盘（此前挂在 InitializeComponent 之后，装载崩溃无记录）
         Current.UnhandledException += (_, e) =>
         {
             StartupLog.Write("界面未处理异常", e.Exception);
@@ -50,8 +60,35 @@ public partial class App : Application
         };
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             StartupLog.Write("后台未处理异常", e.ExceptionObject as Exception ?? new Exception("未知"));
+        // 未观察的任务异常只记不吞：默认行为保留（Finalize 触发时进程不因此终止），但留现场
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+            StartupLog.Write("未观察任务异常", e.Exception);
+
+        InitializeComponent();
+        StartupLog.Write("应用构造完成");
         // 兜底：无论从哪条路径退出进程，都确保子进程被清理（幂等）
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
+    }
+
+    /// <summary>
+    /// 注册 WER 本地转储（HKCU，无需管理员）：native/XAML 层崩溃时收集全量 dump 到
+    /// %LOCALAPPDATA%\TaoDown\dumps，脚本红灯时随证据包归档，无声退出不再盲猜。
+    /// </summary>
+    private static void EnableCrashDumps()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(
+                @"SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\TaoDown.exe");
+            key.SetValue("DumpFolder", Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TaoDown", "dumps"));
+            key.SetValue("DumpType", 2, Microsoft.Win32.RegistryValueKind.DWord);
+            key.SetValue("DumpCount", 5, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch
+        {
+            // 注册表不可写时跳过，托管层黑匣子仍在
+        }
     }
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
