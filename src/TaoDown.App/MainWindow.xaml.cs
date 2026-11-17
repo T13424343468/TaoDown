@@ -1241,51 +1241,45 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
 
 
-            if (PageFrame.Content is DownloadsPage page)
+            // v2.63（老板拍板）：剪贴板识别全页生效——任何页面检测到直链都弹同一套
+
+            // 置顶询问窗，不再只在下载页灵；确认后主窗恢复并跳下载页加任务。
+
+            // 口径不变（v2.60 真机反馈）：只对「像直接下载的文件」弹窗，复制网页地址/HTML 依旧静默。
+
+            if (!LinkClassifier.LooksLikeDirectDownload(normalized))
 
             {
 
-                // v2.60：只对「像直接下载的文件」弹询问窗——复制网页地址/HTML 直接
+                return;
 
-                // 忽略，不填输入框、不设待处理标记（真机反馈：复制网页地址也不该有任何动作）。
+            }
 
-                if (!LinkClassifier.LooksLikeDirectDownload(normalized))
+
+
+            App.PendingClipboardLink = normalized;
+
+            // 下载页在前台时保持原行为：链接先落输入框，无论选哪边都不丢
+
+            (PageFrame.Content as DownloadsPage)?.SetClipboardLink(normalized);
+
+            // v2.59：顶级置顶询问窗——独立窗口、屏幕居中、保证可见
+
+            if (await AskWindow.ShowAsync("检测到剪贴板链接", $"{normalized}\n是否立即添加下载？", normalized))
+
+            {
+
+                RestoreFromTray();
+
+                ShowDownloads();
+
+                if (PageFrame.Content is DownloadsPage page)
 
                 {
-
-                    return;
-
-                }
-
-
-
-                App.PendingClipboardLink = normalized;
-
-                page.SetClipboardLink(normalized);
-
-
-
-                // v2.59：改顶级置顶询问窗——独立窗口、屏幕居中、保证可见；确认后主窗回下载页置顶
-
-                if (await AskWindow.ShowAsync("检测到剪贴板链接", $"{normalized}\n是否立即添加下载？", normalized))
-
-                {
-
-                    RestoreFromTray();
-
-                    Nav.SelectedItem = Nav.MenuItems[0];
 
                     await page.AddFromClipboardAsync(normalized);
 
                 }
-
-            }
-
-            else
-
-            {
-
-                Nav.SelectedItem = Nav.MenuItems[0];
 
             }
 
