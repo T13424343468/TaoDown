@@ -65,6 +65,12 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     private int _ftpFailStreak;
 
+    /// <summary>
+    /// 任务提交失败（引擎 RPC 不可达）时触发；引擎名下无任务在轮询时这是引擎死亡的唯一信号，
+    /// 界面层据此立即自愈，不必等 TellStatus 连击攒满（v1.0.12 修红，M9 FTP 三轮全灭实锤）。
+    /// </summary>
+    public event EventHandler? EngineSubmitFailed;
+
     /// <summary>主引擎连续 RPC 失败次数（任一成功即归零）；达到阈值由界面层触发自愈重启。</summary>
 
     public int MainRpcFailStreak
@@ -124,22 +130,32 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-        var gid = kind switch
-
+        string gid;
+        try
         {
-
-            LinkKind.BitTorrent when task.Url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) =>
-
-                await client.AddUriAsync([task.Url], downloadOptions, ct),
-
-            LinkKind.Http or LinkKind.Ftp or LinkKind.BitTorrent or LinkKind.Ed2k =>
-
-                await client.AddUriAsync([task.Url], downloadOptions, ct),
-
-            _ => throw new InvalidOperationException($"暂不支持的链接类型：{kind}"),
-
-        };
-
+            gid = kind switch
+            {
+                LinkKind.BitTorrent when task.Url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) =>
+                    await client.AddUriAsync([task.Url], downloadOptions, ct),
+                LinkKind.Http or LinkKind.Ftp or LinkKind.BitTorrent or LinkKind.Ed2k =>
+                    await client.AddUriAsync([task.Url], downloadOptions, ct),
+                _ => throw new InvalidOperationException($"暂不支持的链接类型：{kind}"),
+            };
+        }
+        catch (Exception ex)
+        {
+            // v1.0.12 修红（云批 44042676045 实锤）：引擎死亡后若名下没有任务在轮询，
+            // TellStatus 失败计数永远是 0，ReviveEngineAsync 自愈永不触发——
+            // FTP 任务（唯一走 FTP 引擎的流量）提交失败就是引擎死亡的唯一信号，必须计入连击
+            lock (_gate)
+            {
+                if (ReferenceEquals(client, _client)) { _mainFailStreak++; }
+                else { _ftpFailStreak++; }
+            }
+            RefreshDiag.Write($"任务提交失败（计入引擎连击）：{ex.Message}");
+            EngineSubmitFailed?.Invoke(this, EventArgs.Empty);
+            throw;
+        }
         task.EngineId = gid;
 
         task.Status = DownloadStatus.Active;

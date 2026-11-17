@@ -550,6 +550,14 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
         Clipboard.ContentChanged += OnClipboardChanged;
 
+        // v1.0.12 修红（云批 44042676045 实锤，M3 三轮全灭）：Windows 只在应用处于前台时
+        // 触发 ContentChanged，云桌面/被其他窗口遮挡时静默失灵——问询窗永远不弹。
+        // 加 2 秒轮询兜底：同一入口复用，_checkingClipboard 防重入，代价可忽略。
+        var clipTimer = DispatcherQueue.CreateTimer();
+        clipTimer.Interval = TimeSpan.FromSeconds(2);
+        clipTimer.Tick += (_, _) => OnClipboardChanged(this, EventArgs.Empty);
+        clipTimer.Start();
+
     }
 
 

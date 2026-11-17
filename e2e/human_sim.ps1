@@ -354,9 +354,12 @@ try {
 
     # ===== M3 剪贴板监视（ContentChanged 仅前台触发：先唤前台）=====
     SnapCase 'M3' 'before'
-    try { (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null; Start-Sleep -Seconds 2 } catch { }
+    # v1.0.12 修红：AppActivate 对 WinUI 置顶窗不可靠（三轮全灭实锤），改用单实例
+    # 激活事件唤前台（无参 Start-Process 已有实例时走 RestoreFromTray），前台化更稳
+    Start-Process $appExe
+    Start-Sleep -Seconds 3
     Set-Clipboard "http://127.0.0.1:$port/m3.bin"
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 6
     if ((Invoke-Button '立即下载' 30) -and (Wait-Complete $log 'm3.bin' 180)) { Record M3 PASS '询问窗确认后入列完成' } else { Record M3 FAIL '询问窗未弹或完成未达' }
     SnapCase 'M3' 'after'
 
@@ -402,9 +405,20 @@ try {
             $null = & python -m pip install --quiet pyftpdlib 2>$null
             Start-Process python -ArgumentList '-m','pyftpdlib','-p','2121','-w','-d',"$env:TEMP" -WindowStyle Hidden
             Start-Sleep -Seconds 6
-            $big = "$env:TEMP\m9.bin"; $fs = [System.IO.File]::Create($big); for ($i=0; $i -lt 100; $i++) { $fs.Write($buf,0,$buf.Length) }; $fs.Close()
-            $null = Set-LinkBox "ftp://127.0.0.1:2121/m9.bin"
-            if (Wait-Complete $log 'm9.bin' 180) { Record M9 PASS 'FTP 真源完成' } else { Record M9 FAIL 'FTP 下载未完成' }
+            # v1.0.12 环境隔离：云端 pip 偶尔装不上 pyftpdlib，源根本没起——连不上 2121 时
+            # 记 SKIP（环境不可用），不再把环境问题记成产品 FAIL 掩盖真问题
+            $ftpAlive = $false
+            try {
+                $tc = [System.Net.Sockets.TcpClient]::new()
+                $tc.Connect('127.0.0.1', 2121); $ftpAlive = $tc.Connected; $tc.Close()
+            } catch { $ftpAlive = $false }
+            if (-not $ftpAlive) {
+                Record M9 SKIP 'FTP 源未监听 2121（云端环境不可用）'
+            } else {
+                $big = "$env:TEMP\m9.bin"; $fs = [System.IO.File]::Create($big); for ($i=0; $i -lt 100; $i++) { $fs.Write($buf,0,$buf.Length) }; $fs.Close()
+                $null = Set-LinkBox "ftp://127.0.0.1:2121/m9.bin"
+                if (Wait-Complete $log 'm9.bin' 180) { Record M9 PASS 'FTP 真源完成' } else { Record M9 FAIL 'FTP 下载未完成' }
+            }
             Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq '' } | Stop-Process -Force -ErrorAction SilentlyContinue
         } else { Record M9 SKIP '云端无 python' }
     } catch { Record M9 SKIP "FTP 源起不起来：$($_.Exception.Message)" }

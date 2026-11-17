@@ -147,6 +147,12 @@ public partial class App : Application
             }
 
             Downloads = new Aria2DownloadService(primaryClient, ftpClient, new DownloadTaskStore());
+            // v1.0.12 修红：提交失败=引擎不可达，立即自愈（引擎名下没任务在轮询时，
+            // TellStatus 连击永远攒不满，FTP 任务是唯一信号源——M9 三轮全灭实锤）
+            Downloads.EngineSubmitFailed += async (_, _) =>
+            {
+                try { await ReviveEngineAsync(); } catch { }
+            };
             // 上次会话的任务列表接回来：未终态任务重新提交引擎续传（进度靠 .aria2 控制文件不丢）
             var restoredTasks = await Downloads.RestorePendingAsync();
             StartupLog.Write($"任务恢复：{restoredTasks} 个未完成任务已重新提交引擎");
