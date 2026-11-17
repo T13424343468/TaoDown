@@ -117,17 +117,19 @@ public sealed class DownloadQueue : IDisposable
                 }
                 catch
                 {
-                    // 提交失败：释放名额并放回等待队列，5 秒后自动重泵一次
-                    //（此前只靠下一次事件重泵，引擎自愈窗口内等待任务会无限滞留）
+                    // 提交失败：释放名额并放回等待队列，退避重泵直至引擎接受
+                    //（2026-11-17 云批实锤：只重试一次撞上引擎重启窗口即永久静默——
+                    // 18:54 重启后 26 分钟零派发，40 任务 30 分钟仅 1/40 到终态）
                     lock (_gate)
                     {
                         _activeIds.Remove(next.Task.Id);
                         _waiting.Add(next);
                     }
 
-                    _ = RetryPumpLaterAsync(ct);
+                    ScheduleRetryPump(ct);
 
-                    throw;
+                    // 引擎暂不可用：本轮停泵，等待重泵；不外抛，避免连环失败刷屏
+                    return;
                 }
 
                 Submitted?.Invoke(this, next.Task);
@@ -142,20 +144,86 @@ public sealed class DownloadQueue : IDisposable
         }
     }
 
-    /// <summary>提交失败后的延时重泵：给引擎自愈/源恢复留窗口，只重试一次，避免无限循环。</summary>
-    private async Task RetryPumpLaterAsync(CancellationToken ct)
+    /// <summary>提交失败后的重泵间隔：给引擎自愈/源恢复留窗口。</summary>
+    public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>提交失败后连续重泵的次数上限；到顶后保留等待队列，等下一次入队/事件/引擎重启重触发。</summary>
+    public int MaxRetryAttempts { get; set; } = 36;
+
+    private bool _retryScheduled;
+
+    private int _retryAttempts;
+
+    /// <summary>单飞重泵：失败链只有一条，期间的新失败不叠加新链。</summary>
+    private void ScheduleRetryPump(CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            if (_retryScheduled)
+            {
+                return;
+            }
+
+            _retryScheduled = true;
+            _retryAttempts = 0;
+        }
+
+        _ = RetryPumpLoopAsync(ct);
+    }
+
+    private async Task RetryPumpLoopAsync(CancellationToken ct)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
-            await PumpAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
+            while (true)
+            {
+                try
+                {
+                    await Task.Delay(RetryDelay, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                lock (_gate)
+                {
+                    var due = _waiting.Any(e => e.StartAt is null || e.StartAt <= _clock());
+                    if (!due)
+                    {
+                        return; // 等待队列已清空（或只剩未到时的定时任务）：无需再泵
+                    }
+                }
+
+                await PumpAsync(ct).ConfigureAwait(false);
+
+                lock (_gate)
+                {
+                    var stillDue = _waiting.Any(e => e.StartAt is null || e.StartAt <= _clock());
+                    if (!stillDue)
+                    {
+                        return; // 全部派发成功，收链
+                    }
+
+                    _retryAttempts++;
+                    if (_retryAttempts >= Math.Max(1, MaxRetryAttempts))
+                    {
+                        return; // 到顶：不无限循环；下一次入队/事件/引擎自愈重提会重新拉起
+                    }
+                }
+            }
         }
         catch (Exception)
         {
-            // 重试仍失败：保留等待队列，等下一次事件或自愈重泵；不向外抛
+            // 重泵链内异常不外抛：等待队列仍在，后续事件会再触发
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _retryScheduled = false;
+                _retryAttempts = 0;
+            }
         }
     }
 
