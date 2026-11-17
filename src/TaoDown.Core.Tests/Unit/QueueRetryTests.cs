@@ -171,26 +171,28 @@ public class QueueRetryTests
     [Fact]
     public async Task R3_RetriesBounded_QueueStaysAvailableForNextEvent()
     {
-        // 场景：引擎长时间不可用，重泵到顶后收链（不无限循环）；
-        // 引擎恢复后下一次触发（入队/事件/重启重提）仍能整队派发
+        // 场景：引擎长时间不可用，快速重试到顶后不弃队——转慢速对账，
+        // 引擎在慢速窗口内恢复时，等待任务被兜底拉起（云批 43990094154 实锤：
+        // 第三次引擎重启的重提事件未接住，25 个任务标回等待后再无人管）
         var service = new FlakyService { FailTimes = int.MaxValue };
         using var queue = new DownloadQueue(service)
         {
             MaxConcurrent = 3,
             RetryDelay = TimeSpan.FromMilliseconds(20),
             MaxRetryAttempts = 2,
+            SlowRetryDelay = TimeSpan.FromMilliseconds(60),
         };
 
         var task = MakeTask(1);
         await queue.EnqueueAsync(task);
-        await Task.Delay(300); // 让重泵链跑满 2 次并收链
+        await Task.Delay(300); // 让快速重试跑满 2 次并转入慢速对账
 
         Assert.Empty(service.Added); // 引擎一直没就绪：如实未派发
         Assert.Single(queue.Waiting()); // 任务仍在等待队列，不丢
 
-        service.FailTimes = 0; // 引擎恢复
-        await queue.PumpAsync(); // 下一次触发（事件/重启重提等价物）
+        service.FailTimes = 0; // 引擎在慢速窗口内恢复
 
-        await WaitFor(() => service.Added.Count == 1);
+        await WaitFor(() => service.Added.Count == 1, timeoutMs: 5000); // 慢速对账兜底拉起
+        Assert.Empty(queue.Waiting());
     }
 }

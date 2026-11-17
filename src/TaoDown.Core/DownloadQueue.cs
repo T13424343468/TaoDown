@@ -147,8 +147,14 @@ public sealed class DownloadQueue : IDisposable
     /// <summary>提交失败后的重泵间隔：给引擎自愈/源恢复留窗口。</summary>
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>提交失败后连续重泵的次数上限；到顶后保留等待队列，等下一次入队/事件/引擎重启重触发。</summary>
+    /// <summary>提交失败后连续重泵的次数上限；到顶后转入慢速对账（云批 43990094154 实锤：
+    /// 引擎第三次自愈重启时重提事件未接住，25 个任务被标回等待后再无人管）。</summary>
     public int MaxRetryAttempts { get; set; } = 36;
+
+    /// <summary>快速重试到顶后的慢速对账间隔：只要等待队列还有任务，慢速兜底重泵直到排空。</summary>
+    public TimeSpan SlowRetryDelay { get; set; } = TimeSpan.FromSeconds(60);
+
+    private readonly CancellationTokenSource _lifetimeCts = new();
 
     private bool _retryScheduled;
 
@@ -175,11 +181,12 @@ public sealed class DownloadQueue : IDisposable
     {
         try
         {
-            while (true)
+            while (!_lifetimeCts.IsCancellationRequested)
             {
+                var delay = _retryAttempts < Math.Max(1, MaxRetryAttempts) ? RetryDelay : SlowRetryDelay;
                 try
                 {
-                    await Task.Delay(RetryDelay, ct).ConfigureAwait(false);
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -206,10 +213,12 @@ public sealed class DownloadQueue : IDisposable
                     }
 
                     _retryAttempts++;
-                    if (_retryAttempts >= Math.Max(1, MaxRetryAttempts))
-                    {
-                        return; // 到顶：不无限循环；下一次入队/事件/引擎自愈重提会重新拉起
-                    }
+                }
+
+                // 快速重试有界；到顶不弃队，转慢速对账兜底直到排空或对象释放
+                if (_retryAttempts >= Math.Max(1, MaxRetryAttempts) && SlowRetryDelay <= TimeSpan.Zero)
+                {
+                    return;
                 }
             }
         }
@@ -258,6 +267,7 @@ public sealed class DownloadQueue : IDisposable
 
     public void Dispose()
     {
+        _lifetimeCts.Cancel();
         _service.Updated -= OnServiceUpdated;
         _service.Removed -= OnServiceRemoved;
     }
