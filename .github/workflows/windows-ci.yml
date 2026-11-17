@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: 场景选择
         shell: pwsh
-        run: Write-Host "测试场景: $env:SCENARIO"
+        run: 'Write-Host "测试场景: $env:SCENARIO"'
 
       - name: 检出代码
         uses: actions/checkout@v4
