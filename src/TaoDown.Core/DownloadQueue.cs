@@ -36,6 +36,7 @@ public sealed class DownloadQueue : IDisposable
         _clock = clock ?? (() => DateTime.Now);
         _service.Updated += OnServiceUpdated;
         _service.Removed += OnServiceRemoved;
+        _ = ReconcileLoopAsync();
     }
 
     /// <summary>入队；priority 越大越先开始，startAt 晚于当前时间则定时开始。</summary>
@@ -45,6 +46,12 @@ public sealed class DownloadQueue : IDisposable
         _service.RegisterWaiting(task);
         lock (_gate)
         {
+            // 去重：引擎自愈重启会整队重提，同一任务双份入列会双份下载（占坑表和等待队列都查）
+            if (_waiting.Any(e => e.Task.Id == task.Id) || _activeIds.Contains(task.Id))
+            {
+                return;
+            }
+
             _waiting.Add(new Entry { Task = task, Priority = priority, StartAt = startAt });
         }
 
@@ -241,7 +248,10 @@ public sealed class DownloadQueue : IDisposable
         var slotFreed = false;
         lock (_gate)
         {
-            if (task.Status is DownloadStatus.Complete or DownloadStatus.Error or DownloadStatus.Paused)
+            // 引擎自愈重启会把活动任务标回等待：名额必须当场腾出，
+            // 否则队列按旧账认定满员，重提的整队永久派不出去（云批 43990094154 第三次重启后 29 分钟零派发实锤）
+            if (task.Status is DownloadStatus.Complete or DownloadStatus.Error or DownloadStatus.Paused
+                or DownloadStatus.Waiting)
             {
                 slotFreed = _activeIds.Remove(task.Id);
             }
@@ -263,6 +273,36 @@ public sealed class DownloadQueue : IDisposable
         }
 
         _ = PumpAsync();
+    }
+
+    /// <summary>对账扫描间隔：等待队列有活且名额有空时的兜底重泵周期（事件漏接的最终保险）。</summary>
+    public TimeSpan ReconcileInterval { get; set; } = TimeSpan.FromSeconds(60);
+
+    private async Task ReconcileLoopAsync()
+    {
+        while (!_lifetimeCts.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(ReconcileInterval, _lifetimeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            bool due;
+            lock (_gate)
+            {
+                due = _activeIds.Count < Math.Max(1, MaxConcurrent)
+                    && _waiting.Any(e => e.StartAt is null || e.StartAt <= _clock());
+            }
+
+            if (due)
+            {
+                _ = PumpAsync();
+            }
+        }
     }
 
     public void Dispose()

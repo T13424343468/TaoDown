@@ -76,6 +76,13 @@ public class QueueRetryTests
             task.Status = DownloadStatus.Complete;
             Updated?.Invoke(this, task);
         }
+
+        public void MarkWaiting(string taskId, DownloadTask task)
+        {
+            // 模拟引擎自愈重启：活动任务被服务层标回等待并广播
+            task.Status = DownloadStatus.Waiting;
+            Updated?.Invoke(this, task);
+        }
     }
 
     private static DownloadTask MakeTask(int i) => new()
@@ -194,5 +201,50 @@ public class QueueRetryTests
 
         await WaitFor(() => service.Added.Count == 1, timeoutMs: 5000); // 慢速对账兜底拉起
         Assert.Empty(queue.Waiting());
+    }
+
+    [Fact]
+    public async Task R4_EngineRestartMarksWaiting_SlotsFreedImmediately()
+    {
+        // 云批 43990094154 病根：引擎重启把活动任务标回等待，但并发名额账本仍记着旧账，
+        // 队列认定满员，重提的整队永久派不出去（29 分钟零派发）
+        var service = new FlakyService();
+        using var queue = new DownloadQueue(service)
+        {
+            MaxConcurrent = 1,
+            RetryDelay = TimeSpan.FromMilliseconds(30),
+        };
+
+        var a = MakeTask(1);
+        var b = MakeTask(2);
+        var c = MakeTask(3);
+        await queue.EnqueueAsync(a);
+        await queue.EnqueueAsync(b); // b 排队（名额 1 被 a 占）
+        await queue.EnqueueAsync(c); // c 排队
+        Assert.Equal([a.Id], service.Added);
+
+        // 引擎自愈重启：a 被标回等待 → 名额当场腾出 → b 立刻顶上，不是等没人管
+        service.MarkWaiting(a.Id, a);
+        await WaitFor(() => service.Added.Count >= 2);
+        Assert.Equal([a.Id, b.Id], service.Added);
+
+        service.MarkWaiting(b.Id, b);
+        await WaitFor(() => service.Added.Count >= 3);
+        Assert.Equal([a.Id, b.Id, c.Id], service.Added);
+    }
+
+    [Fact]
+    public async Task R5_RestormResubmit_DoesNotDoubleSubmit()
+    {
+        // 引擎重启整队重提时，同一任务若已提交不得再入列：双份提交=双份下载
+        var service = new FlakyService();
+        using var queue = new DownloadQueue(service) { MaxConcurrent = 3 };
+
+        var a = MakeTask(1);
+        await queue.EnqueueAsync(a);
+        await queue.EnqueueAsync(a); // 重提同任务
+        await Task.Delay(100);
+
+        Assert.Single(service.Added); // 只提交一次
     }
 }
