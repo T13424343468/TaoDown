@@ -22,6 +22,14 @@ public sealed class DownloadTask
 
     public string? FileName { get; set; }
 
+    /// <summary>
+    /// Content-Disposition 探测解析出的显式落盘名（经 out 下发引擎）。
+    /// 探测成功即持久化：引擎自愈重启/会话恢复重提时直接复用，
+    /// 不再受二次探测成败摆布（run 44094592404 M18 实锤：重提探测失败回退引擎原生
+    /// Content-Disposition 命名，156 字中文名被截成 82 字）。
+    /// </summary>
+    public string? OutName { get; set; }
+
     public string SaveDir { get; set; } = string.Empty;
 
     public DownloadStatus Status { get; set; } = DownloadStatus.Waiting;

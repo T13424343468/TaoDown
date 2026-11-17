@@ -141,7 +141,19 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                     && !ProxyBypass.ShouldBypass(task.Url)
                     ? AllProxy
                     : null;
-                var outName = await ContentDispositionName.ResolveOutAsync(task.Url, probeProxy, ct);
+                // 修红（run 44094592404 M18 实锤）：引擎自愈重启后中断任务重提，二次探测一旦失败
+                // 就回退引擎原生 Content-Disposition 命名（156 字中文名被截成 82 字）。
+                // 首次探测成功的名字持久化到 task.OutName，重提/续传直接复用，不重复受探测成败摆布。
+                var outName = task.OutName;
+                if (string.IsNullOrWhiteSpace(outName))
+                {
+                    outName = await ContentDispositionName.ResolveOutAsync(task.Url, probeProxy, ct);
+                    if (!string.IsNullOrWhiteSpace(outName))
+                    {
+                        task.OutName = outName;
+                    }
+                }
+
                 if (!string.IsNullOrWhiteSpace(outName))
                 {
                     downloadOptions["out"] = outName;
