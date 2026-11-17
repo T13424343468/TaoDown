@@ -1401,9 +1401,13 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
+        string? rawError = null;
+
         if (status.TryGetProperty("errorMessage", out var err) && err.GetString() is { } msg && msg.Length > 0)
 
         {
+
+            rawError = msg;
 
             // 自动应对（2026-11-02 用户定调：要结果与反馈，不只给报错）：
 
@@ -1455,7 +1459,7 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
         }
 
-        task.Status = status.TryGetProperty("status", out var st) && st.GetString() is string s
+        var mapped = status.TryGetProperty("status", out var st) && st.GetString() is string s
 
             ? s switch
 
@@ -1477,7 +1481,37 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
             : task.Status;
 
+        // 暂时性网络错误不终态化（云批 44022149029 实锤：崩溃恢复后断源窗口约 4 分钟，
+        // file1/file3/file4/big.2 等连接拒绝重试烧光被判终态失败；源恢复后对账只重泵等待队列，
+        // 7 个任务此后 26 分钟零动静——暂时性失败必须退避重试到源恢复）。
+        var transientRetry = false;
+        if (mapped == DownloadStatus.Error && rawError is { } raw && EngineErrorText.Transient(raw)
+
+            && TryScheduleTransientRetry(task))
+        {
+            ForgetGids(task.Id);
+            task.EngineId = null;
+            task.Error = null; // 未终态，不留错误文案避免误导读
+            mapped = DownloadStatus.Waiting;
+            transientRetry = true;
+        }
+        else if (mapped is DownloadStatus.Error or DownloadStatus.Complete)
+        {
+            lock (_gate)
+            {
+                _transientRetries.Remove(task.Id); // 真·终态：重试账目清零
+            }
+        }
+
+        task.Status = mapped;
+
         Updated?.Invoke(this, task);
+
+        // 退避重提：交 App 侧队列按不早于时刻定时入队（与引擎重启重提同一通道）
+        if (transientRetry)
+        {
+            NeedsResubmit?.Invoke(this, task);
+        }
 
         // 完成→回读文件头识别假文件（只校验一次）
 
@@ -1494,6 +1528,72 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
     }
 
     private readonly HashSet<string> _contentChecked = new();
+
+    private sealed class TransientRetryState
+    {
+        public int Attempts;
+
+        public DateTime NotBefore;
+    }
+
+    private readonly Dictionary<string, TransientRetryState> _transientRetries = new();
+
+    /// <summary>暂时性网络错误的最大自动重试次数；到顶仍失败才判终态（默认 30 次，退避覆盖约 1 小时断源窗口）。</summary>
+    public int MaxTransientRetries { get; set; } = 30;
+
+    /// <summary>暂时性失败任务的下次重提时刻距今；无登记返回零（App 侧据此带定时入队，断源窗口不空转）。</summary>
+    public TimeSpan GetResubmitDelay(DownloadTask task)
+    {
+        lock (_gate)
+        {
+            return _transientRetries.TryGetValue(task.Id, out var s)
+                ? s.NotBefore - DateTime.Now
+                : TimeSpan.Zero;
+        }
+    }
+
+    /// <summary>
+    /// 暂时性网络错误登记：计一次退避重试；返回 false 表示重试到顶，按终态失败处理。
+    /// 刻意不随任务转 Active 清零——源反复抖动时仍有上限兜底，不会无限循环。
+    /// </summary>
+    private bool TryScheduleTransientRetry(DownloadTask task)
+    {
+        lock (_gate)
+        {
+            var state = _transientRetries.TryGetValue(task.Id, out var s) ? s : new TransientRetryState();
+            state.Attempts++;
+            if (state.Attempts > Math.Max(1, MaxTransientRetries))
+            {
+                _transientRetries.Remove(task.Id);
+                return false;
+            }
+
+            // 退避：前 3 次 15 秒，4~10 次 60 秒，之后 5 分钟——覆盖崩溃恢复后的断源窗口
+            var delay = state.Attempts <= 3
+                ? TimeSpan.FromSeconds(15)
+                : state.Attempts <= 10
+                    ? TimeSpan.FromSeconds(60)
+                    : TimeSpan.FromSeconds(300);
+            state.NotBefore = DateTime.Now + delay;
+            _transientRetries[task.Id] = state;
+            RefreshDiag.Write($"暂时性网络错误，退避重试（第 {state.Attempts} 次，{delay.TotalSeconds:0} 秒后重提）：{task.FileName ?? task.Url}");
+            return true;
+        }
+    }
+
+    /// <summary>清掉某任务名下的全部 gid 映射：转等待重提或终态时防旧号被轮询复活。</summary>
+    private void ForgetGids(string taskId)
+    {
+        lock (_gate)
+        {
+            var dead = _gidToTaskId.Where(kv => kv.Value == taskId).Select(kv => kv.Key).ToList();
+            foreach (var gid in dead)
+            {
+                _gidToTaskId.Remove(gid);
+                _gidToClient.Remove(gid);
+            }
+        }
+    }
 
     /// <summary>黑匣子用：记录已成功轮询过的 gid，只落首次成功一条，避免刷屏。</summary>
 

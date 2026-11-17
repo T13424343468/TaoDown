@@ -122,21 +122,37 @@ public sealed class DownloadQueue : IDisposable
                 {
                     await _service.AddAsync(next.Task, ct);
                 }
-                catch
+                catch (OperationCanceledException)
                 {
-                    // 提交失败：释放名额并放回等待队列，退避重泵直至引擎接受
-                    //（2026-11-17 云批实锤：只重试一次撞上引擎重启窗口即永久静默——
-                    // 18:54 重启后 26 分钟零派发，40 任务 30 分钟仅 1/40 到终态）
+                    // 提交被打断（停机）：任务放回队尾等待，退出本轮派发
                     lock (_gate)
                     {
                         _activeIds.Remove(next.Task.Id);
                         _waiting.Add(next);
                     }
+                    return;
+                }
+                catch
+                {
+                    // 提交失败：名额当场释放，任务带冷却期挪到队尾，本轮继续派发后续任务。
+                    // 此前是放回队头 + return 停泵：队头任务一直失败会把整条队列堵死
+                    //（2026-11-17 云批 44022149029 实锤：FTP 任务卡住队头，24.8 分钟零 addUri，
+                    // 排在其后的全部 HTTP 任务永不被派发）。
+                    lock (_gate)
+                    {
+                        _activeIds.Remove(next.Task.Id);
+                        _waiting.Add(new Entry
+                        {
+                            Task = next.Task,
+                            Priority = next.Priority,
+                            StartAt = _clock() + RetryDelay,
+                        });
+                    }
 
                     ScheduleRetryPump(ct);
 
-                    // 引擎暂不可用：本轮停泵，等待重泵；不外抛，避免连环失败刷屏
-                    return;
+                    // 冷却期由重泵/对账链兜底重试；不外抛，避免连环失败刷屏
+                    continue;
                 }
 
                 Submitted?.Invoke(this, next.Task);
@@ -202,10 +218,9 @@ public sealed class DownloadQueue : IDisposable
 
                 lock (_gate)
                 {
-                    var due = _waiting.Any(e => e.StartAt is null || e.StartAt <= _clock());
-                    if (!due)
+                    if (_waiting.Count == 0)
                     {
-                        return; // 等待队列已清空（或只剩未到时的定时任务）：无需再泵
+                        return; // 等待队列已清空：无需再泵
                     }
                 }
 
@@ -213,8 +228,7 @@ public sealed class DownloadQueue : IDisposable
 
                 lock (_gate)
                 {
-                    var stillDue = _waiting.Any(e => e.StartAt is null || e.StartAt <= _clock());
-                    if (!stillDue)
+                    if (_waiting.Count == 0)
                     {
                         return; // 全部派发成功，收链
                     }

@@ -247,4 +247,92 @@ public class QueueRetryTests
 
         Assert.Single(service.Added); // 只提交一次
     }
+
+/// <summary>按链接类型选择性失败的假服务：FTP 提交一直失败，HTTP 正常。</summary>
+    private sealed class SelectivelyFailingService : IDownloadService
+    {
+        public List<string> Added { get; } = [];
+
+        public event EventHandler<DownloadTask>? Updated;
+
+        public event EventHandler<string>? Removed;
+
+        public void RegisterWaiting(DownloadTask task)
+        {
+        }
+
+        public Task<string> AddAsync(DownloadTask task, CancellationToken ct = default)
+        {
+            if (task.Kind == LinkKind.Ftp)
+            {
+                throw new InvalidOperationException("FTP 服务不可用（425 无法打开数据连接）");
+            }
+
+            lock (Added)
+            {
+                Added.Add(task.Id);
+            }
+
+            return Task.FromResult(task.Id);
+        }
+
+        public Task PauseAsync(string taskId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ResumeAsync(string taskId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task RemoveAsync(string taskId, CancellationToken ct = default)
+        {
+            Removed?.Invoke(this, taskId);
+            return Task.CompletedTask;
+        }
+
+        public Task<int> PauseAllAsync(CancellationToken ct = default) => Task.FromResult(0);
+
+        public Task<int> ResumeAllAsync(CancellationToken ct = default) => Task.FromResult(0);
+
+        public Task<int> ClearFinishedAsync(CancellationToken ct = default) => Task.FromResult(0);
+
+        public Task<IReadOnlyList<DownloadTask>> ListAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<DownloadTask>>([]);
+
+        public void Complete(string taskId, DownloadTask task)
+        {
+            task.Status = DownloadStatus.Complete;
+            Updated?.Invoke(this, task);
+        }
+
+        public void MarkWaiting(string taskId, DownloadTask task)
+        {
+            task.Status = DownloadStatus.Waiting;
+            Updated?.Invoke(this, task);
+        }
+    }
+
+    [Fact]
+    public async Task R6_HeadOfQueueKeepsFailing_HttpTasksBehindStillDispatched()
+    {
+        // 2026-11-17 云批 44022149029 实锤：FTP 任务提交失败卡在队头，
+        // PumpAsync 的 catch 直接 return 停泵，排在后面的全部 HTTP 任务 24.8 分钟零派发。
+        // 现要求：队头任务失败进冷却期挪到队尾，后续 HTTP 任务照常派发。
+        var service = new SelectivelyFailingService();
+        using var queue = new DownloadQueue(service)
+        {
+            MaxConcurrent = 3,
+            RetryDelay = TimeSpan.FromMilliseconds(30),
+        };
+
+        var ftp = new DownloadTask { Url = "ftp://a.com/file.zip", Kind = LinkKind.Ftp };
+        var http1 = MakeTask(1);
+        var http2 = MakeTask(2);
+        var http3 = MakeTask(3);
+        await queue.EnqueueAsync(ftp); // 队头 FTP 一直失败
+        await queue.EnqueueAsync(http1);
+        await queue.EnqueueAsync(http2);
+        await queue.EnqueueAsync(http3);
+
+        // 3 个 HTTP 全部到引擎，不被队头堵死；FTP 仍在等待队列轮转冷却
+        await WaitFor(() => service.Added.Count == 3, timeoutMs: 5000);
+        Assert.Equal([http1.Id, http2.Id, http3.Id], service.Added.Take(3));
+        Assert.Contains(ftp.Id, queue.Waiting().Select(t => t.Id)); // FTP 未丢，仍受兜底照管
+    }
 }

@@ -267,4 +267,75 @@ public sealed class TaskRestoreTests : IDisposable
         Assert.Equal(DownloadStatus.Waiting, taken.Status);
         Assert.Empty(fresh.TakeRestoredWaiting()); // 取后清空，不重复交回
     }
+
+    [Fact]
+    public async Task S12_TransientError_NotTerminal_SchedulesBackoffResubmit()
+    {
+        // 云批 44022149029 实锤：崩溃恢复后断源窗口内连接拒绝把重试烧光被判终态失败，
+        // 源恢复后对账只重泵等待队列，7 个任务永久滞留——暂时性失败必须转等待退避重试。
+        var store = NewStore();
+        using var svc = new Aria2DownloadService(
+            new Aria2Client(StubAria2Server.OptionsFor(_server)), null, store);
+        var task = StubAria2Server.NewTask("http://a.com/flaky.zip");
+        var resubmits = new List<DownloadTask>();
+        svc.NeedsResubmit += (_, t) => resubmits.Add(t);
+
+        await svc.AddAsync(task);
+        _server.TellStatusPayload = _ => "{\"status\":\"error\",\"errorMessage\":\"Failed to connect to 127.0.0.1:18100 after 2028 ms: Could not connect to server\"}";
+
+        await svc.RefreshAsync();
+
+        Assert.Equal(DownloadStatus.Waiting, task.Status); // 不终态化
+        Assert.Null(task.Error); // 未终态，不留错误文案
+        Assert.True(svc.GetResubmitDelay(task) > TimeSpan.Zero); // 已排退避重提
+        Assert.Single(resubmits); // App 侧据此定时入队
+    }
+
+    [Fact]
+    public async Task S13_TransientError_Exhausted_BecomesTerminalError()
+    {
+        // 重试到顶必须收口成终态失败，不许无限循环：上限 = MaxTransientRetries，超出即判死。
+        var store = NewStore();
+        using var svc = new Aria2DownloadService(
+            new Aria2Client(StubAria2Server.OptionsFor(_server)), null, store)
+        {
+            MaxTransientRetries = 2,
+        };
+        var task = StubAria2Server.NewTask("http://a.com/dead.zip");
+        _server.TellStatusPayload = _ => "{\"status\":\"error\",\"errorMessage\":\"Connection stalled\"}";
+
+        for (var round = 1; round <= 3; round++)
+        {
+            await svc.AddAsync(task); // 每轮由队列重提一次（新 gid）
+            await svc.RefreshAsync();
+            if (round <= 2)
+            {
+                Assert.Equal(DownloadStatus.Waiting, task.Status); // 前两轮仍在退避重试
+            }
+        }
+
+        Assert.Equal(DownloadStatus.Error, task.Status); // 第 3 次（超上限）判终态
+        Assert.Equal(TimeSpan.Zero, svc.GetResubmitDelay(task)); // 账目清零
+    }
+
+    [Fact]
+    public async Task S14_ResourceError_StaysTerminal()
+    {
+        // 资源类错误（磁盘满）不在暂时性清单里：不该被退避逻辑拖成无限重试。
+        var store = NewStore();
+        using var svc = new Aria2DownloadService(
+            new Aria2Client(StubAria2Server.OptionsFor(_server)), null, store);
+        var task = StubAria2Server.NewTask("http://a.com/full-disk.zip");
+        var resubmits = new List<DownloadTask>();
+        svc.NeedsResubmit += (_, t) => resubmits.Add(t);
+
+        await svc.AddAsync(task);
+        _server.TellStatusPayload = _ => "{\"status\":\"error\",\"errorMessage\":\"No space left on device\"}";
+
+        await svc.RefreshAsync();
+
+        Assert.Equal(DownloadStatus.Error, task.Status);
+        Assert.Empty(resubmits);
+    }
+
 }

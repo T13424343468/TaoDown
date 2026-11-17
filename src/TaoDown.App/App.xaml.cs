@@ -129,7 +129,9 @@ public partial class App : Application
             {
                 try
                 {
-                    await Queue.EnqueueAsync(resubmitTask);
+                    // 暂时性网络错误退避重提：按服务层给出的不早于时刻定时入队（断源窗口内不空转打引擎）
+                    var delay = Downloads.GetResubmitDelay(resubmitTask);
+                    await Queue.EnqueueAsync(resubmitTask, startAt: delay > TimeSpan.Zero ? DateTime.Now + delay : null);
                 }
                 catch (Exception ex)
                 {

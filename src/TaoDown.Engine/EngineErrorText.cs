@@ -35,6 +35,45 @@ public static class EngineErrorText
         (raw.Contains("cannot be continued", StringComparison.OrdinalIgnoreCase)
          || raw.Contains("ignores ranges", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>暂时性网络错误（连接拒绝/超时/停滞/解析失败等）：断源窗口与网络抖动内
+    /// 不得终态化。云批 44022149029 实锤：崩溃恢复后本地源约 4 分钟未起，
+    /// 连接拒绝把重试烧光、任务被判终态失败；源恢复后对账只重泵等待队列，
+    /// 7 个任务此后 26 分钟零动静。暂时性失败必须退避重试到源恢复。</summary>
+    public static bool Transient(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        foreach (var keyword in TransientKeywords)
+        {
+            if (raw.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>暂时性网络错误关键字；磁盘满、文件冲突、续传被拒等资源类错误不在其列。</summary>
+    public static readonly string[] TransientKeywords =
+    [
+        "failed to connect",
+        "could not connect",
+        "connection refused",
+        "connection timed out",
+        "timeout",
+        "timed out",
+        "connection stalled",
+        "temporary failure",
+        "temporarily",
+        "name resolution",
+        "name or service not known",
+        "network is unreachable",
+        "network is down",
+    ];
     /// <summary>关键字 → 人话。匹配按序首个命中。</summary>
     public static readonly (string Keyword, string Hint)[] Known =
     [
