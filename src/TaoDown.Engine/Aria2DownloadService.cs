@@ -152,6 +152,12 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                     {
                         task.OutName = outName;
                     }
+                    else
+                    {
+                        // 修红（run 44128258709 实锤）：探测两连败静默回退引擎原生命名，长中文名
+                        // 被截断——回退必须留痕，否则复红时无实锤可查（本轮红场即无声无息）。
+                        RefreshDiag.Write($"文件名探测未取得 Content-Disposition，交引擎原生命名（长名有截断风险）：{task.Url}");
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(outName))

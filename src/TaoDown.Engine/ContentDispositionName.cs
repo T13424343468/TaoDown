@@ -68,32 +68,48 @@ public static class ContentDispositionName
             return null;
         }
 
-        try
+        // 修红（run 44128258709 实锤）：探测偶发一次超时/异常（runner 冷启动网络栈抖动）就静默
+        // 回退引擎原生命名，长中文名被截断——同一 URL 网络层瞬断不值得放弃，重试一次再交回退。
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var proxy = ToWebProxy(allProxy);
-            using var handler = new HttpClientHandler
+            try
             {
-                AllowAutoRedirect = true,
-                Proxy = proxy,
-                UseProxy = proxy is not null,
-            };
-            using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
-            using var req = new HttpRequestMessage(HttpMethod.Get, uri);
-            req.Headers.TryAddWithoutValidation("Range", "bytes=0-0");
-            req.Headers.TryAddWithoutValidation("User-Agent", "TaoDown/1.0 filename-probe");
-            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                var proxy = ToWebProxy(allProxy);
+                using var handler = new HttpClientHandler
+                {
+                    AllowAutoRedirect = true,
+                    Proxy = proxy,
+                    UseProxy = proxy is not null,
+                };
+                using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
+                using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+                req.Headers.TryAddWithoutValidation("Range", "bytes=0-0");
+                req.Headers.TryAddWithoutValidation("User-Agent", "TaoDown/1.0 filename-probe");
+                using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
 
-            if (!resp.Content.Headers.TryGetValues("Content-Disposition", out var values))
-            {
-                return null;
+                if (!resp.Content.Headers.TryGetValues("Content-Disposition", out var values))
+                {
+                    // 服务器明确没带头：重试也是同样答案，直接回退
+                    return null;
+                }
+
+                return ParseName(string.Join(", ", values));
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return null; // 提交方取消，不重试
+            }
+            catch
+            {
+                // 网络类异常：第一次失败再试一次；仍失败不挡提交
+                if (attempt == 2)
+                {
+                    return null;
+                }
+            }
+        }
 
-            return ParseName(string.Join(", ", values));
-        }
-        catch
-        {
-            return null; // 探测失败不挡提交
-        }
+        return null;
     }
 
     private static WebProxy? ToWebProxy(string? allProxy)
