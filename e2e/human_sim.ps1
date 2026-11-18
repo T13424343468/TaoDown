@@ -799,6 +799,36 @@ try {
     } catch { Record M31 FAIL "异常：$($_.Exception.Message)" }
     SnapCase 'M31' 'after'
 
+    # ===== M32 磁力链接全页询问窗+入列（补测第三轮：磁力/种子场景）=====
+    Clear-StaleAsk
+    SnapCase 'M32' 'before'
+    try {
+        # M31 结束停在设置页：正好考「非下载页复制磁力也弹窗」
+        Set-Clipboard 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=m32-magnet-task.bin'
+        $r = Invoke-Button '立即下载' 20
+        if (-not $r) { Record M32 FAIL '磁力链接未弹询问窗（接管口径被破）' }
+        else {
+            if (Invoke-NavPage '下载' 15) {
+                Start-Sleep -Seconds 5
+                $row = Find-RowByNeedle 'm32-magnet'
+                if (-not $row) { Start-Sleep -Seconds 10; $row = Find-RowByNeedle 'm32-magnet' }
+                if ($row) { Record M32 PASS '磁力确认后任务入列（无种环境不强求完成）' } else { Dump-UIATree 'M32-norow'; Record M32 FAIL '磁力确认后任务未入列' }
+            } else { Record M32 SKIP '下载页导航不可达（UIA）' }
+        }
+    } catch { Record M32 FAIL "异常：$($_.Exception.Message)" }
+    SnapCase 'M32' 'after'
+
+    # ===== M33 .torrent 直链真下载（补测第三轮：种子文件直链按下载接管）=====
+    Clear-StaleAsk
+    SnapCase 'M33' 'before'
+    try {
+        Set-Clipboard "http://127.0.0.1:$port/m33.torrent"
+        $r = Invoke-Button '立即下载' 20
+        if ($r -and (Wait-Complete $log 'm33.torrent' 180)) { Record M33 PASS '种子直链弹窗并完成下载' } else { Record M33 FAIL '种子直链弹窗失效或未完成' }
+    } catch { Record M33 FAIL "异常：$($_.Exception.Message)" }
+    Clear-StaleAsk
+    SnapCase 'M33' 'after'
+
     # ===== M24 关窗最小化托盘 =====
     # v3 修红：主窗标题带版本号（TaoDown x.y.z），按精确名找不到会假绿——改用 Get-MainWindow
     $win = Get-MainWindow
