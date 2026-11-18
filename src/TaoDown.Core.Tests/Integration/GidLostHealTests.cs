@@ -31,7 +31,7 @@ public class GidLostHealTests
         stub.TellStatusPayload = _ =>
             "{\"status\":\"error\",\"errorMessage\":\"...cannot be continued: the server ignores ranges\",\"totalLength\":\"100\",\"completedLength\":\"0\",\"downloadSpeed\":\"0\",\"connections\":\"0\"}";
         await service.RefreshAsync();
-        await StubAria2Server.WaitForAsync(() => stub.AddUriCalls >= 2, TimeSpan.FromSeconds(5));
+        await StubAria2Server.WaitForAsync(() => stub.AddUriCalls >= 2 && task.EngineId == "g2", TimeSpan.FromSeconds(5)); // 等 EngineId 回填：AddUriCalls 先于落号，只等计数会与重下落号竞态（run 44283792225 云机闪真实锤）
 
         // 重下必须复用显式名，绕开引擎 Content-Disposition 截断
         Assert.Equal(2, stub.AddUriCalls);
