@@ -375,6 +375,12 @@ function Find-AppExe {
     throw "找不到已安装的 TaoDown.exe"
 }
 function Start-App { Start-Process $script:appExe; Start-Sleep -Seconds 10; $null = Invoke-Button '知道了' 15; Start-Sleep -Seconds 2 }
+function Get-NumberInnerEdit([System.Windows.Automation.AutomationElement]$box) {
+    # WinUI NumberBox 的 UIA 值在内层 Edit 上：优先按 ValuePattern 摸，摸不到再递归找 Edit
+    try { $null = $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); return $box } catch { }
+    return (Find-WalkAll $box { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit } catch { return $false } } | Select-Object -First 1)
+}
+
 $appExe = Find-AppExe
 $dataRoot = foreach ($p in "D:\TaoDownData\TaoDown", "$env:USERPROFILE\TaoDownData\TaoDown") { if (Test-Path $p) { $p; break } }
 $log = Join-Path $dataRoot "logs\startup.log"
@@ -870,8 +876,9 @@ try {
             }
             if (-not $box) { Record M34 SKIP 'SpeedLimitBox 不可达（UIA）' }
             else {
-                $vp = $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                $vp.SetValue('1024')
+                $inner = Get-NumberInnerEdit $box
+                if (-not $inner) { throw 'NumberBox 内层 Edit 不可达' }
+                $inner.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1024')
                 if (-not (Invoke-Button '保存设置' 15)) { Record M34 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
                 else {
                     # 重启后引擎带参启动，进程命令行是对账锚点
@@ -888,7 +895,7 @@ try {
                     $b2 = $null
                     $w2 = Get-MainWindow
                     if ($w2) { $b2 = Find-ById $w2 'SpeedLimitBox' }
-                    if ($b2) { $b2.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0'); $null = Invoke-Button '保存设置' 15 }
+                    if ($b2) { $i2 = Get-NumberInnerEdit $b2; if ($i2) { $i2.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0'); $null = Invoke-Button '保存设置' 15 } }
                     $null = Invoke-NavPage '下载'
                 }
             }
@@ -912,7 +919,9 @@ try {
             }
             if (-not $box) { Record M35 SKIP 'MaxConcurrentBox 不可达（UIA）' }
             else {
-                $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1')
+                $inner1 = Get-NumberInnerEdit $box
+                if (-not $inner1) { throw 'NumberBox 内层 Edit 不可达' }
+                $inner1.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1')
                 if (-not (Invoke-Button '保存设置' 15)) { Record M35 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
                 else {
                     for ($i = 1; $i -le 3; $i++) {
@@ -928,7 +937,7 @@ try {
                     # 复原上限=3
                     $null = Invoke-NavPage '设置'
                     $w3 = Get-MainWindow
-                    if ($w3) { $b3 = Find-ById $w3 'MaxConcurrentBox'; if ($b3) { $b3.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('3'); $null = Invoke-Button '保存设置' 15 } }
+                    if ($w3) { $b3 = Find-ById $w3 'MaxConcurrentBox'; if ($b3) { $i3 = Get-NumberInnerEdit $b3; if ($i3) { $i3.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('3'); $null = Invoke-Button '保存设置' 15 } } }
                     $null = Invoke-NavPage '下载'
                 }
             }
@@ -952,16 +961,19 @@ try {
             }
             if (-not $tb) { Record M36 SKIP 'ThemeBox 不可达（UIA）' }
             else {
-                # 切第二主题（即改即存口径：切完主窗口不崩、无异常横幅）
+                # 切第二主题（WinUI ComboBox 选项在弹层：全窗枚举 ListItem，FILTERSEL 同法）
                 $picked = $false
                 try {
                     $tb.SetFocus()
                     Start-Sleep -Milliseconds 800
                     $tb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-                    Start-Sleep -Milliseconds 1200
-                    foreach ($it in (Find-WalkAll $tb { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })) {
-                        if ($it.Current.Name -and $it.Current.Name -notlike '*(当前)*') {
-                            try { $it.Select(); $picked = $true; break } catch { }
+                    Start-Sleep -Milliseconds 1500
+                    $w36 = Get-MainWindow
+                    if ($w36) {
+                        foreach ($it in (Find-WalkAll $w36 { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })) {
+                            if ($it.Current.Name -like '*深色*' -or $it.Current.Name -like '*浅色*' -or $it.Current.Name -like '*主题*') {
+                                try { $it.Select(); $picked = $true; break } catch { continue }
+                            }
                         }
                     }
                     Start-Sleep -Milliseconds 800
