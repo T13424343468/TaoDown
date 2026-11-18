@@ -32,6 +32,9 @@ public sealed class StubAria2Server : IDisposable
     /// <summary>按 gid 返回 tellStatus 的原始 JSON 对象；null 用默认活动状态。</summary>
     public Func<string, string?>? TellStatusPayload { get; set; }
 
+    /// <summary>注入 tellStatus 的 JSON-RPC 错误消息（如 gid 失联「is not found」）；设置后 tellStatus 一律报错。</summary>
+    public string? TellStatusError { get; set; }
+
     /// <summary>注入故障：所有方法回 JSON-RPC 错误（客户端抛 InvalidOperationException）。</summary>
     public bool FailAll { get; set; }
 
@@ -126,6 +129,7 @@ public sealed class StubAria2Server : IDisposable
                     case "aria2.tellStatus":
                         TellStatusCalls++;
                         var gid = doc.RootElement.GetProperty("params")[1].GetString()!;
+                        if (TellStatusError is { } terr) { error = terr; break; }
                         result = TellStatusPayload?.Invoke(gid) ??
                             "{\"status\":\"active\",\"totalLength\":\"100\",\"completedLength\":\"10\",\"downloadSpeed\":\"10\",\"connections\":\"3\",\"files\":[{\"path\":\"C:\\\\d\\\\f.bin\"}]}";
                         break;

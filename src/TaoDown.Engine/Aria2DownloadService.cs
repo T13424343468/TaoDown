@@ -772,6 +772,46 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
             {
 
+                // 修红（run 44230657598 B 段实锤）：file12 引擎 03:52:22 已下载完成，应用侧映射
+                // 失联后任务在 Active 挂了 28 分钟不落终态——引擎已不认这个 gid 时任务必须自愈：
+                // 转等待态重新提交（--continue 保断点；文件已完整时引擎立即判完成），不留静默挂死。
+                var rawMsg = ex.Message ?? string.Empty;
+
+                if (rawMsg.Contains("is not found", StringComparison.OrdinalIgnoreCase) ||
+                    rawMsg.Contains("not found for GID", StringComparison.OrdinalIgnoreCase))
+                {
+                    var lostResubmit = false;
+
+                    lock (_gate)
+
+                    {
+                        if (_gidToTaskId.TryGetValue(gid, out var mappedId) && mappedId == task.Id &&
+                            task.Status is DownloadStatus.Active or DownloadStatus.Waiting)
+                        {
+                            _gidToTaskId.Remove(gid);
+
+                            _gidToClient.Remove(gid);
+
+                            task.EngineId = null;
+
+                            task.Status = DownloadStatus.Waiting;
+
+                            lostResubmit = true;
+                        }
+                    }
+
+                    if (lostResubmit)
+                    {
+                        RefreshDiag.Write($"任务在引擎侧失联（gid 不存在），转等待重提保断点：{task.FileName ?? task.Url}");
+
+                        Updated?.Invoke(this, task);
+
+                        NeedsResubmit?.Invoke(this, task);
+                    }
+
+                    continue;
+                }
+
                 // RPC 暂不可用/网络抖动时保留上一状态，下轮再刷新；绝不把异常抛给界面层。
 
                 // 连续失败按引擎分别计数，供界面层触发引擎自愈（v2.54：引擎死了不再无声挂掉）
@@ -1391,6 +1431,49 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
                 ["allow-overwrite"] = "true",
 
             };
+
+            // 修红（run 44230657598 M18 实锤）：续传被拒自愈重下原样不带 out，引擎原生
+            // Content-Disposition 命名把 156 字中文名截成 82 字——重下必须带显式名：
+            // 已持久化的 OutName 直接复用；没有则补探一次，探不到维持引擎默认（不挡重下）。
+            var freshOutName = task.OutName;
+
+            if (string.IsNullOrWhiteSpace(freshOutName))
+
+            {
+
+                try
+
+                {
+
+                    freshOutName = await ContentDispositionName.ResolveOutAsync(task.Url, AllProxy, CancellationToken.None);
+
+                    if (!string.IsNullOrWhiteSpace(freshOutName))
+
+                    {
+
+                        task.OutName = freshOutName;
+
+                    }
+
+                }
+
+                catch
+
+                {
+
+                    // 探测任何异常都不挡重下
+
+                }
+
+            }
+
+            if (!string.IsNullOrWhiteSpace(freshOutName))
+
+            {
+
+                options["out"] = freshOutName;
+
+            }
 
             var newGid = await client.AddUriAsync([task.Url], options, CancellationToken.None);
 
