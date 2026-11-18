@@ -243,6 +243,28 @@ function Dump-UIATree([string]$tag) {
     } catch { Write-Host "UIATREE $tag 转储异常：$($_.Exception.Message)" }
 }
 
+# v12 新增：行级子树转储（治「摸不到所以修不准」，只打该行内部，证据包直接可读）
+function Dump-Subtree($el, [string]$tag) {
+    try {
+        $lines = New-Object System.Collections.Generic.List[string]
+        $stack = New-Object System.Collections.Stack
+        $stack.Push(@($el, 0))
+        while ($stack.Count -gt 0 -and $lines.Count -lt 120) {
+            $pair = $stack.Pop(); $e = $pair[0]; $depth = [int]$pair[1]
+            try {
+                $n = $e.Current.Name; $aid = $e.Current.AutomationId; $ct = $e.Current.ControlType
+                $lines.Add(("  " * [Math]::Min($depth, 8)) + "$($ct.ProgrammaticName) id=[$aid] name=[$n]")
+            } catch { }
+            try {
+                $w = [System.Windows.Automation.TreeWalker]::RawViewWalker
+                $c = $w.GetFirstChild($e)
+                while ($c) { $stack.Push(@($c, $depth + 1)); $c = $w.GetNextSibling($c) }
+            } catch { }
+        }
+        Write-Host "SUBTREE $tag 行数=$($lines.Count)"
+        foreach ($l in $lines) { Write-Host "SUBTREE $tag | $l" }
+    } catch { Write-Host "SUBTREE $tag 异常：$($_.Exception.Message)" }
+}
 # ---------- 本地真实源（v2：同进程 Runspace，活对象直传，修复死源根因）----------
 $port = 18100
 $buf = New-SrcBuf
@@ -608,16 +630,31 @@ try {
         $null = Set-LinkBox "http://127.0.0.1:$port/m28.bin"
         if (-not (Wait-Complete $log 'm28.bin' 180)) { Record M28 SKIP '前置任务未完成（环境）' }
         else {
-            $row = Find-RowByNeedle 'm28'
-            $opened = $false
-            if ($row) { $opened = Invoke-RowButton $row 'RowDeleteButton' }
-            if (-not $opened) { Record M28 SKIP '任务行或删除按钮不可达（UIA）' }
+            $row = $null
+            $dl = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $dl) {
+                $row = Find-RowByNeedle 'm28'
+                if ($row) { break }
+                Start-Sleep -Milliseconds 800
+            }
+            if (-not $row) { Dump-UIATree 'M28-norow'; Record M28 SKIP '任务行不可达（UIA）' }
             else {
-                Start-Sleep -Seconds 2
-                if (-not (Invoke-Button '取消' 15)) { Record M28 FAIL '删除未弹确认窗（先问再删口径被破）' }
+                $btn = $null
+                $dl = (Get-Date).AddSeconds(10)
+                while ((Get-Date) -lt $dl) {
+                    try { $btn = Find-ById $row 'RowDeleteButton' } catch { }
+                    if ($btn) { break }
+                    Start-Sleep -Milliseconds 800
+                }
+                if (-not $btn) { Dump-Subtree $row 'M28-row'; Record M28 SKIP '删除按钮不可达（UIA）' }
                 else {
+                    try { ($btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } catch { Record M28 SKIP '删除按钮调用失败（UIA）' }
                     Start-Sleep -Seconds 2
-                    if (Find-RowByNeedle 'm28') { Record M28 PASS '取消后任务健在' } else { Record M28 FAIL '取消后任务消失' }
+                    if (-not (Invoke-Button '取消' 15)) { Record M28 FAIL '删除未弹确认窗（先问再删口径被破）' }
+                    else {
+                        Start-Sleep -Seconds 2
+                        if (Find-RowByNeedle 'm28') { Record M28 PASS '取消后任务健在' } else { Record M28 FAIL '取消后任务消失' }
+                    }
                 }
             }
         }
@@ -632,43 +669,51 @@ try {
         if (-not $f) { Record M29 SKIP 'm28 本地文件不在（前置缺失）' }
         else {
             $row = Find-RowByNeedle 'm28'
-            $opened = $false
-            if ($row) { $opened = Invoke-RowButton $row 'RowDeleteButton' }
-            if (-not $opened) { Record M29 SKIP '任务行或删除按钮不可达（UIA）' }
+            if (-not $row) { Record M29 SKIP '任务行不可达（UIA）' }
             else {
-                Start-Sleep -Seconds 2
-                $chk = $null
-                try {
-                    $w = Get-MainWindow
-                    if ($w) {
-                        $hits = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox -and $e.Current.Name -like '*同时删除本地文件*' } catch { return $false } }
-                        if ($hits -and @($hits).Count -gt 0) { $chk = $hits[0] }
-                    }
-                } catch { }
-                if (-not $chk) { Record M29 FAIL '确认窗缺勾选框（口径缺失）'; $null = Invoke-Button '取消' 5 }
+                $btn = $null
+                $dl = (Get-Date).AddSeconds(10)
+                while ((Get-Date) -lt $dl) {
+                    try { $btn = Find-ById $row 'RowDeleteButton' } catch { }
+                    if ($btn) { break }
+                    Start-Sleep -Milliseconds 800
+                }
+                if (-not $btn) { Dump-Subtree $row 'M29-row'; Record M29 SKIP '删除按钮不可达（UIA）' }
                 else {
-                    ($chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
-                    Start-Sleep -Seconds 1
-                    if (-not (Invoke-Button '删除' 15)) { Record M29 SKIP '删除按钮不可达'; $null = Invoke-Button '取消' 5 }
-                    else {
-                        $gone = $false
-                        $deadline = (Get-Date).AddSeconds(15)
-                        while ((Get-Date) -lt $deadline) {
-                            if (-not (Find-RowByNeedle 'm28')) { $gone = $true; break }
-                            Start-Sleep -Milliseconds 500
+                    try { ($btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } catch { Record M29 SKIP '删除按钮调用失败（UIA）' }
+                    Start-Sleep -Seconds 2
+                    $chk = $null
+                    try {
+                        $w = Get-MainWindow
+                        if ($w) {
+                            $hits = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox -and $e.Current.Name -like '*同时删除本地文件*' } catch { return $false } }
+                            if ($hits -and @($hits).Count -gt 0) { $chk = $hits[0] }
                         }
-                        $fileGone = -not (Test-Path $f.FullName)
-                        if ($gone -and $fileGone) { Record M29 PASS '任务与本地文件一并清理' }
-                        elseif (-not $gone) { Record M29 FAIL '任务行仍在' }
-                        else { Record M29 FAIL '任务删了但文件还在' }
+                    } catch { }
+                    if (-not $chk) { Record M29 FAIL '确认窗缺勾选框（口径缺失）'; $null = Invoke-Button '取消' 5 }
+                    else {
+                        ($chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+                        Start-Sleep -Seconds 1
+                        if (-not (Invoke-Button '删除' 15)) { Record M29 SKIP '删除按钮不可达'; $null = Invoke-Button '取消' 5 }
+                        else {
+                            $gone = $false
+                            $dl = (Get-Date).AddSeconds(15)
+                            while ((Get-Date) -lt $dl) {
+                                if (-not (Find-RowByNeedle 'm28')) { $gone = $true; break }
+                                Start-Sleep -Milliseconds 500
+                            }
+                            $fileGone = -not (Test-Path $f.FullName)
+                            if ($gone -and $fileGone) { Record M29 PASS '任务与本地文件一并清理' }
+                            elseif (-not $gone) { Record M29 FAIL '任务行仍在' }
+                            else { Record M29 FAIL '任务删了但文件还在' }
+                        }
                     }
                 }
             }
         }
     } catch { Record M29 FAIL "异常：$($_.Exception.Message)" }
     SnapCase 'M29' 'after'
-
-    # ===== M30 过滤器三视图行数账（全部 = 进行中 + 已完成）=====
+    # ===== M30 过滤器三视图行数账（全部 = 进行中 + 已完成；选择必须真生效）=====
     Clear-StaleAsk
     SnapCase 'M30' 'before'
     try {
@@ -677,13 +722,19 @@ try {
                 $w = Get-MainWindow
                 $box = if ($w) { Find-ById $w 'FilterBox' } else { $null }
                 if (-not $box) { return -1 }
-                ($box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
-                Start-Sleep -Seconds 1
-                $items = Find-WalkAll ([System.Windows.Automation.AutomationElement]::RootElement) { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq $label } catch { return $false } }
-                if ($items -and @($items).Count -gt 0) {
-                    ($items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
-                    Start-Sleep -Seconds 2
-                    return @(Get-TaskRows).Count
+                # 选择并核对生效：FilterBox 的 UIA Name 应等于所选项；未生效重试 3 次
+                for ($try = 0; $try -lt 3; $try++) {
+                    try { ($box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand() } catch { }
+                    Start-Sleep -Seconds 1
+                    $items = Find-WalkAll ([System.Windows.Automation.AutomationElement]::RootElement) { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq $label } catch { return $false } }
+                    if ($items -and @($items).Count -gt 0) {
+                        try { ($items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select() } catch { }
+                        Start-Sleep -Seconds 2
+                    }
+                    $sel = ''
+                    try { $sel = (Find-ById (Get-MainWindow) 'FilterBox').Current.Name } catch { }
+                    Write-Host "FILTERSEL label=$label try=$try boxName=[$sel]"
+                    if ($sel -eq $label) { return @(Get-TaskRows).Count }
                 }
             } catch { }
             return -1
@@ -693,12 +744,11 @@ try {
         $nDone = Get-FilterCount '已完成'
         $nBack = Get-FilterCount '全部'
         Write-Host "FILTERCOUNT 全部=$nAll 进行中=$nRun 已完成=$nDone 回全部=$nBack"
-        if ($nAll -lt 0 -or $nRun -lt 0 -or $nDone -lt 0) { Record M30 SKIP '筛选选项不可达（UIA）' }
+        if ($nAll -lt 0 -or $nRun -lt 0 -or $nDone -lt 0) { Dump-UIATree 'M30-filter'; Record M30 SKIP '筛选选择未生效（UIA）' }
         elseif (($nRun + $nDone) -eq $nAll -and $nAll -eq $nBack) { Record M30 PASS "全部=$nAll 进行中=$nRun 已完成=$nDone 帐目一致" }
-        else { Record M30 FAIL "全部=$nAll 进行中=$nRun 已完成=$nDone 回全部=$nBack" }
+        else { Dump-UIATree 'M30-mismatch'; Record M30 FAIL "全部=$nAll 进行中=$nRun 已完成=$nDone 回全部=$nBack" }
     } catch { Record M30 FAIL "异常：$($_.Exception.Message)" }
     SnapCase 'M30' 'after'
-
     # ===== M31 设置改动重启回读（持久化账）=====
     Clear-StaleAsk
     SnapCase 'M31' 'before'
