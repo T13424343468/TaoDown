@@ -149,6 +149,37 @@ function Clear-StaleAsk {
     if ($n -gt 0) { Write-Host "清理遗留询问窗 $n 扇" }
 }
 
+# ---------- v11 第二轮补测新增助手（删除窗/过滤器/设置回读）----------
+function Invoke-NavPage([string]$pageName, [int]$timeoutSec = 15) {
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $w = Get-MainWindow
+            if ($w) {
+                $navs = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq $pageName } catch { return $false } }
+                if ($navs -and @($navs).Count -gt 0) {
+                    ($navs[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+                    Start-Sleep -Seconds 3
+                    return $true
+                }
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+function Find-RowByNeedle([string]$needle) {
+    foreach ($r in (Get-TaskRows)) { if ($r.Current.Name -like "*$needle*") { return $r } }
+    return $null
+}
+function Invoke-RowButton($row, [string]$buttonId) {
+    try {
+        $btn = Find-ById $row $buttonId
+        if ($btn) { ($btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke(); return $true }
+    } catch { }
+    return $false
+}
+
 function Wait-Complete($log, [string]$name, [int]$budgetSec = 180) {
     if ($budgetSec -gt 180) { $budgetSec = 180 }  # 老板令：单用例等待上限 3 分钟
     $deadline = (Get-Date).AddSeconds($budgetSec)
@@ -569,6 +600,154 @@ try {
         } else { Record M27 SKIP '下载导航项不可达（UIA）' }
     } catch { Record M27 FAIL "导航往返异常：$($_.Exception.Message)" }
     SnapCase 'M27' 'after'
+
+    # ===== M28 删除确认窗·取消不动账（口径：先问再删，取消不删）=====
+    Clear-StaleAsk
+    SnapCase 'M28' 'before'
+    try {
+        $null = Set-LinkBox "http://127.0.0.1:$port/m28.bin"
+        if (-not (Wait-Complete $log 'm28.bin' 180)) { Record M28 SKIP '前置任务未完成（环境）' }
+        else {
+            $row = Find-RowByNeedle 'm28'
+            $opened = $false
+            if ($row) { $opened = Invoke-RowButton $row 'RowDeleteButton' }
+            if (-not $opened) { Record M28 SKIP '任务行或删除按钮不可达（UIA）' }
+            else {
+                Start-Sleep -Seconds 2
+                if (-not (Invoke-Button '取消' 15)) { Record M28 FAIL '删除未弹确认窗（先问再删口径被破）' }
+                else {
+                    Start-Sleep -Seconds 2
+                    if (Find-RowByNeedle 'm28') { Record M28 PASS '取消后任务健在' } else { Record M28 FAIL '取消后任务消失' }
+                }
+            }
+        }
+    } catch { Record M28 FAIL "异常：$($_.Exception.Message)" }
+    SnapCase 'M28' 'after'
+
+    # ===== M29 删除确认窗·勾选连本地文件一起删（口径：勾选后文件清理）=====
+    Clear-StaleAsk
+    SnapCase 'M29' 'before'
+    try {
+        $f = Get-DownloadedFile 'm28.bin' 10
+        if (-not $f) { Record M29 SKIP 'm28 本地文件不在（前置缺失）' }
+        else {
+            $row = Find-RowByNeedle 'm28'
+            $opened = $false
+            if ($row) { $opened = Invoke-RowButton $row 'RowDeleteButton' }
+            if (-not $opened) { Record M29 SKIP '任务行或删除按钮不可达（UIA）' }
+            else {
+                Start-Sleep -Seconds 2
+                $chk = $null
+                try {
+                    $w = Get-MainWindow
+                    if ($w) {
+                        $hits = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox -and $e.Current.Name -like '*同时删除本地文件*' } catch { return $false } }
+                        if ($hits -and @($hits).Count -gt 0) { $chk = $hits[0] }
+                    }
+                } catch { }
+                if (-not $chk) { Record M29 FAIL '确认窗缺勾选框（口径缺失）'; $null = Invoke-Button '取消' 5 }
+                else {
+                    ($chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+                    Start-Sleep -Seconds 1
+                    if (-not (Invoke-Button '删除' 15)) { Record M29 SKIP '删除按钮不可达'; $null = Invoke-Button '取消' 5 }
+                    else {
+                        $gone = $false
+                        $deadline = (Get-Date).AddSeconds(15)
+                        while ((Get-Date) -lt $deadline) {
+                            if (-not (Find-RowByNeedle 'm28')) { $gone = $true; break }
+                            Start-Sleep -Milliseconds 500
+                        }
+                        $fileGone = -not (Test-Path $f.FullName)
+                        if ($gone -and $fileGone) { Record M29 PASS '任务与本地文件一并清理' }
+                        elseif (-not $gone) { Record M29 FAIL '任务行仍在' }
+                        else { Record M29 FAIL '任务删了但文件还在' }
+                    }
+                }
+            }
+        }
+    } catch { Record M29 FAIL "异常：$($_.Exception.Message)" }
+    SnapCase 'M29' 'after'
+
+    # ===== M30 过滤器三视图行数账（全部 = 进行中 + 已完成）=====
+    Clear-StaleAsk
+    SnapCase 'M30' 'before'
+    try {
+        function Get-FilterCount([string]$label) {
+            try {
+                $w = Get-MainWindow
+                $box = if ($w) { Find-ById $w 'FilterBox' } else { $null }
+                if (-not $box) { return -1 }
+                ($box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+                Start-Sleep -Seconds 1
+                $items = Find-WalkAll ([System.Windows.Automation.AutomationElement]::RootElement) { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq $label } catch { return $false } }
+                if ($items -and @($items).Count -gt 0) {
+                    ($items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+                    Start-Sleep -Seconds 2
+                    return @(Get-TaskRows).Count
+                }
+            } catch { }
+            return -1
+        }
+        $nAll = Get-FilterCount '全部'
+        $nRun = Get-FilterCount '进行中'
+        $nDone = Get-FilterCount '已完成'
+        $nBack = Get-FilterCount '全部'
+        Write-Host "FILTERCOUNT 全部=$nAll 进行中=$nRun 已完成=$nDone 回全部=$nBack"
+        if ($nAll -lt 0 -or $nRun -lt 0 -or $nDone -lt 0) { Record M30 SKIP '筛选选项不可达（UIA）' }
+        elseif (($nRun + $nDone) -eq $nAll -and $nAll -eq $nBack) { Record M30 PASS "全部=$nAll 进行中=$nRun 已完成=$nDone 帐目一致" }
+        else { Record M30 FAIL "全部=$nAll 进行中=$nRun 已完成=$nDone 回全部=$nBack" }
+    } catch { Record M30 FAIL "异常：$($_.Exception.Message)" }
+    SnapCase 'M30' 'after'
+
+    # ===== M31 设置改动重启回读（持久化账）=====
+    Clear-StaleAsk
+    SnapCase 'M31' 'before'
+    try {
+        if (-not (Invoke-NavPage '设置')) { Record M31 SKIP '设置页不可达（UIA）' }
+        else {
+            $sw = $null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                $w = Get-MainWindow
+                if ($w) { $sw = Find-ById $w 'AutoClassifySwitch' }
+                if ($sw) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $sw) { Record M31 SKIP 'AutoClassifySwitch 不可达（UIA）' }
+            else {
+                $st = $sw.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                $orig = ($st.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+                $newVal = -not $orig
+                $st.Toggle(); Start-Sleep -Seconds 1
+                if (-not (Invoke-Button '保存设置' 15)) { Record M31 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
+                else {
+                    Start-Sleep -Seconds 2
+                    Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Start-Sleep -Seconds 3
+                    $null = Start-App
+                    if (-not (Invoke-NavPage '设置')) { Record M31 SKIP '重启后设置页不可达' }
+                    else {
+                        $sw2 = $null
+                        $deadline = (Get-Date).AddSeconds(10)
+                        while ((Get-Date) -lt $deadline) {
+                            $w = Get-MainWindow
+                            if ($w) { $sw2 = Find-ById $w 'AutoClassifySwitch' }
+                            if ($sw2) { break }
+                            Start-Sleep -Milliseconds 500
+                        }
+                        if (-not $sw2) { Record M31 SKIP '重启后开关不可达（UIA）' }
+                        else {
+                            $st2 = $sw2.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                            $read = ($st2.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+                            if ($read -eq $newVal) { Record M31 PASS '改动重启后回读一致' } else { Record M31 FAIL "改了没存住（改=$newVal 读=$read）" }
+                            if ($read -ne $orig) { $st2.Toggle(); Start-Sleep -Seconds 1; $null = Invoke-Button '保存设置' 10 }
+                        }
+                    }
+                }
+            }
+        }
+    } catch { Record M31 FAIL "异常：$($_.Exception.Message)" }
+    SnapCase 'M31' 'after'
 
     # ===== M24 关窗最小化托盘 =====
     # v3 修红：主窗标题带版本号（TaoDown x.y.z），按精确名找不到会假绿——改用 Get-MainWindow

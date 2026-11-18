@@ -100,11 +100,11 @@
                                         ToolTipService.ToolTip="{x:Bind ActionTip, Mode=OneWay}">
                                     <FontIcon Glyph="{x:Bind ActionGlyph, Mode=OneWay}" FontSize="14" />
                                 </Button>
-                                <Button Tag="{x:Bind Self}" Click="OnRowFolder" Background="Transparent" BorderThickness="0" Padding="4"
+                                <Button x:Name="RowFolderButton" Tag="{x:Bind Self}" Click="OnRowFolder" Background="Transparent" BorderThickness="0" Padding="4"
                                         ToolTipService.ToolTip="打开所在文件夹">
                                     <FontIcon Glyph="&#xE8D5;" FontSize="14" />
                                 </Button>
-                                <Button Tag="{x:Bind Self}" Click="OnRowRemove" Background="Transparent" BorderThickness="0" Padding="4"
+                                <Button x:Name="RowDeleteButton" Tag="{x:Bind Self}" Click="OnRowRemove" Background="Transparent" BorderThickness="0" Padding="4"
                                         ToolTipService.ToolTip="删除任务（已下载文件保留）">
                                     <FontIcon Glyph="&#xE74D;" FontSize="14" />
                                 </Button>
