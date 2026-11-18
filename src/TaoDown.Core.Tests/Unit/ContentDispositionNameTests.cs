@@ -71,3 +71,96 @@ public class ContentDispositionNameTests
         Assert.Equal("we;ird name.bin", parsed);
     }
 }
+
+public class ContentDispositionProbeRetryTests
+{
+    /// <summary>
+    /// 修红（run 44128258709 实锤）：首连被对端 RST（云机网络抖动的最小模拟）时，
+    /// 探测必须重试一次并从第二次成功响应拿到文件名，不得直接回退引擎默认命名。
+    /// </summary>
+    [Fact]
+    public async Task 首连被重置后重试一次拿到文件名()
+    {
+        var uri = await StartProbeServerAsync();
+        try
+        {
+            using var cts = new global::System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var name = await ContentDispositionName.ResolveOutAsync(uri, null, cts.Token);
+
+            Assert.NotNull(name);
+            Assert.Equal("中文重试.bin", name);
+        }
+        finally
+        {
+            _cts.Cancel();
+            _listener.Stop();
+        }
+    }
+
+    private readonly CancellationTokenSource _cts = new();
+    private readonly global::System.Net.Sockets.TcpListener _listener = new(global::System.Net.IPAddress.Loopback, 0);
+    private string? _uri;
+
+    private async Task<string> StartProbeServerAsync()
+    {
+        _listener.Start();
+        var port = ((global::System.Net.IPEndPoint)_listener.LocalEndpoint).Port;
+        _uri = $"http://127.0.0.1:{port}/probe.bin";
+        _ = AcceptLoopAsync();
+        return _uri;
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        var resets = 0;
+        while (!_cts.IsCancellationRequested)
+        {
+            global::System.Net.Sockets.TcpClient client;
+            try { client = await _listener.AcceptTcpClientAsync(_cts.Token); }
+            catch (OperationCanceledException) { break; }
+            catch (global::System.Net.Sockets.SocketException) { break; }
+
+            // 用独立 socket 连接处理，循环继续 accept
+            _ = HandleAsync(client, resets++);
+            if (resets >= 10) { break; }
+        }
+    }
+
+    private async Task HandleAsync(global::System.Net.Sockets.TcpClient client, int index)
+    {
+        try
+        {
+            using (client)
+            {
+                var stream = client.Client;
+                if (index == 0)
+                {
+                    // 第一次连接：强制 RST（Linger State true + 0 秒），模拟网络瞬断
+                    stream.LingerState = new global::System.Net.Sockets.LingerOption(true, 0);
+                    return; // Dispose 时发出 RST
+                }
+
+                // 第二次连接：返回带文件名的真实响应
+                var head = Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: application/octet-stream\r\n" +
+                    $"Content-Disposition: attachment; filename*=UTF-8''{Uri.EscapeDataString("中文重试.bin")}\r\n" +
+                    "Content-Length: 0\r\n" +
+                    "\r\n");
+                // 丢弃请求头（读到空行），再发响应
+                stream.LingerState = new global::System.Net.Sockets.LingerOption(true, 10);
+                var buf = new byte[8192];
+                while (true)
+                {
+                    var read = await stream.ReceiveAsync(buf, _cts.Token);
+                    if (read <= 0 || Encoding.ASCII.GetString(buf, 0, read).Contains("\r\n\r\n")) { break; }
+                }
+                await stream.SendAsync(head, _cts.Token);
+            }
+        }
+        catch
+        {
+            // 测试专用连接，异常直接断开由重试兜底
+        }
+    }
+}

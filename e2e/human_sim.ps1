@@ -501,6 +501,75 @@ try {
     Clear-StaleAsk
     SnapCase 'M23' 'after'
 
+    # ===== M25 剪贴板全页生效（v2.63 老板拍板：任何页面检测到直链都弹置顶询问窗）=====
+    Clear-StaleAsk
+    SnapCase 'M25' 'before'
+    # 先切到设置页：导航项是 ListItem（SelectionItemPattern），不是 Button
+    $navSet = $false
+    try {
+        $w = Get-MainWindow
+        if ($w) {
+            $navs = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq '设置' } catch { return $false } }
+            if ($navs -and @($navs).Count -gt 0) {
+                ($navs[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+                $navSet = $true
+                Start-Sleep -Seconds 3
+            }
+        }
+    } catch { }
+    if (-not $navSet) { Record M25 SKIP '设置导航项不可达（UIA）' }
+    else {
+        $onSettings = $false
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline) {
+            $w = Get-MainWindow
+            if ($w -and (Find-ById $w 'SaveButton')) { $onSettings = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $onSettings) { Record M25 SKIP '设置页未就绪（SaveButton 不可见）' }
+        else {
+            # 场景一：停在设置页，复制直链——询问窗必须弹出且确认后完成
+            Set-Clipboard "http://127.0.0.1:$port/m25.bin"
+            $r = Invoke-Button '立即下载' 20
+            if ($r -and (Wait-Complete $log 'm25.bin' 180)) { Record M25 PASS '设置页复制直链弹窗并完成' } else { Record M25 FAIL '非下载页弹窗失效或完成未达' }
+            # 场景二：复制普通网页地址——依 v2.60 口径必须静默不弹窗
+            Clear-StaleAsk
+            Set-Clipboard 'https://www.example.com/article/123'
+            Start-Sleep -Seconds 8
+            $leaked = $false
+            try {
+                $hits = Find-WalkAll ([System.Windows.Automation.AutomationElement]::RootElement) { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window -and $e.Current.Name -like '检测到剪贴板链接*' } catch { return $false } }
+                if ($hits -and @($hits).Count -gt 0) { $leaked = $true }
+            } catch { }
+            if ($leaked) { Record M26 FAIL '网页地址误弹询问窗（静默口径被破）' } else { Record M26 PASS '网页地址静默不扰（回归不破）' }
+        }
+    }
+    Clear-StaleAsk
+    SnapCase 'M25' 'after'
+
+    # ===== M27 设置页往返不丢任务列表（M26 静默断言在 M25 场景二内完成）=====
+    try {
+        $w = Get-MainWindow
+        $navDl = $null
+        if ($w) {
+            $navs = Find-WalkAll $w { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq '下载' } catch { return $false } }
+            if ($navs -and @($navs).Count -gt 0) { $navDl = $navs[0] }
+        }
+        if ($navDl) {
+            ($navDl.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+            Start-Sleep -Seconds 3
+            $w2 = Get-MainWindow
+            $backOk = $false
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                if ($w2 -and (Find-ById $w2 'TaskList')) { $backOk = $true; break }
+                Start-Sleep -Milliseconds 500
+            }
+            if ($backOk) { Record M27 PASS '设置往返后任务列表健在' } else { Record M27 FAIL '返回下载页 TaskList 不可见' }
+        } else { Record M27 SKIP '下载导航项不可达（UIA）' }
+    } catch { Record M27 FAIL "导航往返异常：$($_.Exception.Message)" }
+    SnapCase 'M27' 'after'
+
     # ===== M24 关窗最小化托盘 =====
     # v3 修红：主窗标题带版本号（TaoDown x.y.z），按精确名找不到会假绿——改用 Get-MainWindow
     $win = Get-MainWindow
