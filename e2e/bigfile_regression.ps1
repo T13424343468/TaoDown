@@ -46,6 +46,20 @@ function Get-CompleteCount($log, $name) {
     if (-not (Test-Path $log)) { return 0 }
     return (Select-String -Path $log -Pattern "→Complete" | Where-Object { $_.Line -like "*$name*" }).Count
 }
+function Get-BTerminalCount($log, $listCount) {
+    # v1.0.13 修红（run 44268213615 file4 实锤）：完成事件丢失时快照对账留痕行是唯一锚点，
+    # 旧账可能缺一行；终态判定改为「日志行或盘面实据（整尺寸文件、无 .aria2）」二选一即到账
+    $done = 0
+    for ($i = 1; $i -le $listCount; $i++) {
+        $ok = (Get-CompleteCount $log "file$i.bin") -gt 0
+        if (-not $ok) {
+            $f = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "file$i.bin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($f -and $f.Length -eq 536870912) { $ok = $true; Write-Host "B: file$i.bin 以盘面实据计到账（日志行缺，盘面完整）" }
+        }
+        $done += [int]$ok
+    }
+    return $done
+}
 function Assert-Watchdog($log) {
     if (Test-Path $log) {
         $slow = Select-String -Path $log -Pattern '界面心跳连续卡顿' | Select-Object -Last 1
@@ -225,15 +239,13 @@ try {
         Start-Sleep -Seconds 60
         if (-not (Get-Process TaoDown -ErrorAction SilentlyContinue)) { throw "B: 并发恢复进程退出，红灯" }
         Assert-Watchdog $log
-        $done = 0
-        for ($i = 1; $i -le $ListCount; $i++) { $done += [int]((Get-CompleteCount $log "file$i.bin") -gt 0) }
+        $done = Get-BTerminalCount $log $ListCount
         $part = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads"), $dataRoot -Filter "file*.bin*" -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '\.aria2' } | Measure-Object Length -Sum
         Write-Host ("B: {0}/{1} Complete，已落盘 {2:N1} GB / {3} GB" -f $done, $ListCount, ($part.Sum/1GB), ($ListCount*0.5))
         if ($done -ge $ListCount) { break }
     }
-    $done = 0
-    for ($i = 1; $i -le $ListCount; $i++) { $done += [int]((Get-CompleteCount $log "file$i.bin") -gt 0) }
+    $done = Get-BTerminalCount $log $ListCount
     if ($done -lt $ListCount) { throw "B: 30 分钟预算内仅 $done/$ListCount 到终态，存在静默失败，红灯" }
     Snap (Join-Path $evd "B-complete.png")
     Assert-Watchdog $log

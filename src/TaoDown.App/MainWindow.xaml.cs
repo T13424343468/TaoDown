@@ -401,6 +401,7 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
 
         App.Downloads!.Updated += OnTaskUpdated;
+        _ = StartupReconcileLogAsync(); // 启动对账：快照里已是终态的任务补留痕行（run 44268213615 file4 实锤：完成事件丢失即永远无账）
 
 
 
@@ -1073,6 +1074,27 @@ public sealed partial class MainWindow : Window, IThemePaintable
 
     }
 
+    }
+
+    /// <summary>启动对账：引擎快照里已是完成/出错的任务各补一条状态留痕行，
+    /// 使每个终态都有日志锚点；只记账不弹气泡，避免启动时轰炸托盘。</summary>
+    private async Task StartupReconcileLogAsync()
+    {
+        try
+        {
+            var tasks = await App.Downloads!.ListAsync();
+            foreach (var task in tasks)
+            {
+                if (task.Status is not (DownloadStatus.Complete or DownloadStatus.Error)) { continue; }
+                if (_lastStatus.ContainsKey(task.Id)) { continue; }
+                _lastStatus[task.Id] = task.Status;
+                StartupLog.Write($"任务状态：{task.FileName ?? task.Url} →{task.Status}（载入快照对账）");
+            }
+        }
+        catch (Exception ex)
+        {
+            StartupLog.Write($"启动对账异常（已拦截）：{ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private void UpdateTaskUi(DownloadTask task)

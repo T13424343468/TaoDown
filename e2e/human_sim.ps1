@@ -749,7 +749,17 @@ try {
                     } catch { }
                     Start-Sleep -Seconds 1
                     Write-Host "FILTERSEL label=$label try=$try picked=[$picked]"
-                    if ($picked) { return @(Get-TaskRows).Count }
+                    if ($picked) {
+                        # 逐行取证：每个视图把可见行的名字打出来，红绿都留实锤（不再只报计数）
+                        $names = @()
+                        foreach ($r in (Get-TaskRows)) {
+                            $n = $r.Current.Name
+                            if (-not $n) { try { $ts = Find-WalkAll $r { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text } catch { return $false } }; $n = (@($ts) | ForEach-Object { $_.Current.Name }) -join '/' } catch { } }
+                            $names += "[$n]"
+                        }
+                        Write-Host "VIEWROWS label=$label rows=$($names -join ' ')"
+                        return $names.Count
+                    }
                 }
             } catch { }
             return -1
