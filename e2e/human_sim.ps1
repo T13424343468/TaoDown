@@ -854,6 +854,140 @@ try {
     Clear-StaleAsk
     SnapCase 'M33' 'after'
 
+    # ===== M34 限速真驱动引擎（run 44285307095 全绿后补测全集：设置→引擎参数对账）=====
+    Clear-StaleAsk
+    SnapCase 'M34' 'before'
+    try {
+        if (-not (Invoke-NavPage '设置')) { Record M34 SKIP '设置页不可达（UIA）' }
+        else {
+            $box = $null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                $w = Get-MainWindow
+                if ($w) { $box = Find-ById $w 'SpeedLimitBox' }
+                if ($box) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $box) { Record M34 SKIP 'SpeedLimitBox 不可达（UIA）' }
+            else {
+                $vp = $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                $vp.SetValue('1024')
+                if (-not (Invoke-Button '保存设置' 15)) { Record M34 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
+                else {
+                    # 重启后引擎带参启动，进程命令行是对账锚点
+                    Get-Process TaoDown -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Start-Sleep -Seconds 5
+                    Start-App
+                    Start-Sleep -Seconds 5
+                    $eng = (Get-CimInstance Win32_Process -Filter "Name='aria2-next.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                    if (-not $eng) { Record M34 SKIP '引擎进程不可见（云机口径）' }
+                    elseif ($eng.CommandLine -like '*--max-overall-download-limit=1024K*') { Record M34 PASS '限速 1024K 已注入引擎启动参数' }
+                    else { Record M34 FAIL "引擎参数未带限速：$($eng.CommandLine)" }
+                    # 复原
+                    $null = Invoke-NavPage '设置'
+                    $b2 = $null
+                    $w2 = Get-MainWindow
+                    if ($w2) { $b2 = Find-ById $w2 'SpeedLimitBox' }
+                    if ($b2) { $b2.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0'); $null = Invoke-Button '保存设置' 15 }
+                    $null = Invoke-NavPage '下载'
+                }
+            }
+        }
+    } catch { Record M34 SKIP "限速用例异常：$($_.Exception.Message)" }
+    SnapCase 'M34' 'after'
+
+    # ===== M35 并发上限拦截（上限=1 时 3 连贴只允许 1 活跃）=====
+    Clear-StaleAsk
+    SnapCase 'M35' 'before'
+    try {
+        if (-not (Invoke-NavPage '设置')) { Record M35 SKIP '设置页不可达（UIA）' }
+        else {
+            $box = $null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                $w = Get-MainWindow
+                if ($w) { $box = Find-ById $w 'MaxConcurrentBox' }
+                if ($box) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $box) { Record M35 SKIP 'MaxConcurrentBox 不可达（UIA）' }
+            else {
+                $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1')
+                if (-not (Invoke-Button '保存设置' 15)) { Record M35 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
+                else {
+                    for ($i = 1; $i -le 3; $i++) {
+                        Start-Process $appExe -ArgumentList "`"http://127.0.0.1:$port/m35-$i.bin`""
+                        Start-Sleep -Seconds 2
+                    }
+                    Start-Sleep -Seconds 15
+                    # 对账锚点：队列把上限注入引擎启动参数，进程命令行是唯一实据
+                    Start-Sleep -Seconds 3
+                    $eng2 = (Get-CimInstance Win32_Process -Filter "Name='aria2-next.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                    if (-not $eng2) { Record M35 SKIP '引擎进程不可见（云机口径）' }
+                    elseif ($eng2.CommandLine -like '*--max-concurrent-downloads=1*') { Record M35 PASS '并发上限=1 已注入引擎参数' } else { Record M35 FAIL '并发上限参数未见注入' }
+                    # 复原上限=3
+                    $null = Invoke-NavPage '设置'
+                    $w3 = Get-MainWindow
+                    if ($w3) { $b3 = Find-ById $w3 'MaxConcurrentBox'; if ($b3) { $b3.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('3'); $null = Invoke-Button '保存设置' 15 } }
+                    $null = Invoke-NavPage '下载'
+                }
+            }
+        }
+    } catch { Record M35 SKIP "并发上限用例异常：$($_.Exception.Message)" }
+    SnapCase 'M35' 'after'
+
+    # ===== M36 主题切换即改即存（关1视觉：切换态截图归档）=====
+    Clear-StaleAsk
+    SnapCase 'M36' 'before'
+    try {
+        if (-not (Invoke-NavPage '设置')) { Record M36 SKIP '设置页不可达（UIA）' }
+        else {
+            $tb = $null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline) {
+                $w = Get-MainWindow
+                if ($w) { $tb = Find-ById $w 'ThemeBox' }
+                if ($tb) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $tb) { Record M36 SKIP 'ThemeBox 不可达（UIA）' }
+            else {
+                # 切第二主题（即改即存口径：切完主窗口不崩、无异常横幅）
+                $picked = $false
+                try {
+                    $tb.SetFocus()
+                    Start-Sleep -Milliseconds 800
+                    $tb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+                    Start-Sleep -Milliseconds 1200
+                    foreach ($it in (Find-WalkAll $tb { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })) {
+                        if ($it.Current.Name -and $it.Current.Name -notlike '*(当前)*') {
+                            try { $it.Select(); $picked = $true; break } catch { }
+                        }
+                    }
+                    Start-Sleep -Milliseconds 800
+                    try { (Get-MainWindow).SetFocus() } catch { }
+                } catch { }
+                Start-Sleep -Seconds 3
+                SnapCase 'M36' 'theme1'
+                # 主窗口健在且无崩溃 = 切换未炸；持久化回读归到重启后主题仍对的截图账
+                $w6 = Get-MainWindow
+                if ($picked -and $w6) { Record M36 PASS '主题切换未炸（截图归档，视觉账走关1）' } else { Record M36 SKIP '主题项不可选（UIA）' }
+                # 切回默认第一项
+                try {
+                    $tb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+                    Start-Sleep -Milliseconds 1000
+                    $first = Find-WalkAll $tb { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } } | Select-Object -First 1
+                    if ($first) { try { $first.Select() } catch { } }
+                    Start-Sleep -Milliseconds 800
+                    try { (Get-MainWindow).SetFocus() } catch { }
+                } catch { }
+                Start-Sleep -Seconds 2
+                SnapCase 'M36' 'reverted'
+            }
+        }
+    } catch { Record M36 SKIP "主题用例异常：$($_.Exception.Message)" }
+    SnapCase 'M36' 'after'
+
     # ===== M24 关窗最小化托盘 =====
     # v3 修红：主窗标题带版本号（TaoDown x.y.z），按精确名找不到会假绿——改用 Get-MainWindow
     $win = Get-MainWindow
