@@ -169,7 +169,14 @@ function Invoke-NavPage([string]$pageName, [int]$timeoutSec = 15) {
     return $false
 }
 function Find-RowByNeedle([string]$needle) {
+    # 先按行名找；云机上行名偶发为空（v4 修红：行名绑定已补，兜底翻行内文本）
     foreach ($r in (Get-TaskRows)) { if ($r.Current.Name -like "*$needle*") { return $r } }
+    foreach ($r in (Get-TaskRows)) {
+        try {
+            $texts = Find-WalkAll $r { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text } catch { return $false } }
+            foreach ($t in $texts) { if ("$($t.Current.Name)" -like "*$needle*") { return $r } }
+        } catch { }
+    }
     return $null
 }
 function Invoke-RowButton($row, [string]$buttonId) {
@@ -731,10 +738,18 @@ try {
                         try { ($items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select() } catch { }
                         Start-Sleep -Seconds 2
                     }
-                    $sel = ''
-                    try { $sel = (Find-ById (Get-MainWindow) 'FilterBox').Current.Name } catch { }
-                    Write-Host "FILTERSEL label=$label try=$try boxName=[$sel]"
-                    if ($sel -eq $label) { return @(Get-TaskRows).Count }
+                    # 核对生效：重开下拉核对所选项 IsSelected（box 的 UIA Name 恒空，不可信）
+                    $picked = $false
+                    try {
+                        ($box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+                        Start-Sleep -Seconds 1
+                        $chk = Find-WalkAll ([System.Windows.Automation.AutomationElement]::RootElement) { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $e.Current.Name -eq $label } catch { return $false } }
+                        if ($chk -and @($chk).Count -gt 0) { $picked = ($chk[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Current.IsSelected }
+                        try { ($box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Collapse() } catch { }
+                    } catch { }
+                    Start-Sleep -Seconds 1
+                    Write-Host "FILTERSEL label=$label try=$try picked=[$picked]"
+                    if ($picked) { return @(Get-TaskRows).Count }
                 }
             } catch { }
             return -1

@@ -57,7 +57,8 @@
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="local:TaskRow">
                     <Grid Padding="12,8" RowSpacing="6" Background="Transparent"
-                          RightTapped="OnRowRightTapped">
+                          RightTapped="OnRowRightTapped"
+                          AutomationProperties.Name="{x:Bind Name, Mode=OneWay}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
