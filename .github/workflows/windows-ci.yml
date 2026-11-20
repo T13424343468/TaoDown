@@ -41,8 +41,8 @@ jobs:
       - name: 还原依赖
         run: dotnet restore src/TaoDown.App/TaoDown.App.csproj
 
-      - name: 核心单元测试
-        run: dotnet test src/TaoDown.Core.Tests/TaoDown.Core.Tests.csproj -c Release --nologo -v q
+      - name: 核心单元测试（含代码覆盖率采集）
+        run: dotnet test src/TaoDown.Core.Tests/TaoDown.Core.Tests.csproj -c Release --nologo -v q --collect:"XPlat Code Coverage" --results-directory coverage
 
       - name: 云端 Windows 编译（Release x64 自包含）
         run: >
@@ -197,6 +197,19 @@ jobs:
           if ($werAfter -gt $werBefore) { throw "出现新的 TaoDown 崩溃报告，攻击者视角不过" }
           Write-Host "恶意攻击者视角：异常输入与路径穿越未引发崩溃，通过"
 
+      - name: 【关7·健壮】 异常注入组（断网恢复/满盘/monkey）+ 性能基线 + 录屏
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress 2>&1 | Out-Null
+          pwsh -File e2e/robustness_injection.ps1 -MonkeyMinutes 3
+      - name: 【对账】上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/**
+          if-no-files-found: ignore
+          retention-days: 14
       - name: 【关6·稳定】 长稳浸泡 30 分钟（自动班：定时/整场手动触发）
         if: github.event_name != 'push' && env.SCENARIO == 'full'
         shell: pwsh
@@ -295,7 +308,7 @@ jobs:
           try { $srcPs.Stop(); $srcRs.Close() } catch { }
           Write-Host '下载高峰 150 秒界面响应达标（看门狗零命中）'
 
-      - name: 【关7·健壮】 升级与回滚路径（覆盖安装→静默卸载→重装验证）
+      - name: 【L8·升级回滚】 升级与回滚路径（覆盖安装→静默卸载→重装验证）
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Windows.Forms
