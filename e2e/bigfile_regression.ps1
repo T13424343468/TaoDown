@@ -36,6 +36,28 @@ function Snap($path) {
     $g.Dispose(); $bmp.Dispose()
     if ((Get-Item $path).Length -lt 20000) { throw "截图疑似空白（$path）" }
 }
+# v2.4.2 修红（run 44649139111 视觉走查实锤：A-kill-mid-download 等证据被 runner 终端窗遮挡，11-15 整改未落到本步）：
+# 截图前先唤目标窗到前台；目标窗不在（如刚杀进程）则最小化当前前台终端窗，保证证据拍到的是现场不是日志窗。
+Add-Type -Namespace Native -Name Win32Snap -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+'@
+function Prep-Snap([string]$ProcName) {
+    try {
+        $p = Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($p) {
+            [Native.Win32Snap]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+            [Native.Win32Snap]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+            Start-Sleep -Milliseconds 800
+            Write-Host ("  已唤 {0} 窗口到前台再拍（防遮挡）" -f $ProcName)
+        } else {
+            $fg = [Native.Win32Snap]::GetForegroundWindow()
+            if ($fg -ne [IntPtr]::Zero) { [Native.Win32Snap]::ShowWindow($fg, 6) | Out-Null; Start-Sleep -Milliseconds 500 }
+            Write-Host "  目标窗未起，已最小化前台终端窗再拍"
+        }
+    } catch { Write-Host ("  截图前置动作异常：{0}" -f $_.Exception.Message) }
+}
 function Find-DataRoot {
     foreach ($p in "D:\TaoDownData\TaoDown", "$env:USERPROFILE\TaoDownData\TaoDown") {
         if (Test-Path $p) { return $p }
@@ -169,6 +191,7 @@ try {
     Start-Process $appExe -ArgumentList "`"http://127.0.0.1:$port/big.bin`""
     Start-Sleep -Seconds 120
     Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force
+    Prep-Snap "TaoDown"
     Snap (Join-Path $evd "A-kill-mid-download.png")
     Write-Host "A: 下载推进 120 秒后强制崩溃，落证据。"
 
@@ -215,6 +238,7 @@ try {
         $bigFile = Get-ChildItem "D:\Program Files\Downloads\TaoDown", (Join-Path $dataRoot "downloads") -Filter "big.bin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $bigFile) { throw "A: 找不到落盘 big.bin" }
         if ($bigFile.Length -ne $bigLen) { throw "A: 落盘 $([int64]$bigFile.Length) 字节 != ContentLength $bigLen，红灯" }
+        Prep-Snap "TaoDown"
         Snap (Join-Path $evd "A-complete.png")
         Write-Host "A: 32GB 下载完成 + 崩溃续传通过，耗时 $([int]((Get-Date)-$t0).TotalMinutes) 分钟"
     }
@@ -225,6 +249,7 @@ try {
         Start-Sleep -Seconds 2
     }
     Start-Sleep -Seconds 90
+    Prep-Snap "TaoDown"
     Snap (Join-Path $evd "B-concurrent-peak.png")
     if (-not $SkipResume) {
         Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force
@@ -247,6 +272,7 @@ try {
     }
     $done = Get-BTerminalCount $log $ListCount
     if ($done -lt $ListCount) { throw "B: 30 分钟预算内仅 $done/$ListCount 到终态，存在静默失败，红灯" }
+    Prep-Snap "TaoDown"
     Snap (Join-Path $evd "B-complete.png")
     Assert-Watchdog $log
     Write-Host "B: 满列表 $ListCount/$ListCount 全部 Complete，看门狗零命中。"

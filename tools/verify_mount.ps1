@@ -65,6 +65,28 @@ function Snap($path) {
   $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
   $g.Dispose(); $bmp.Dispose()
 }
+# v2.4.2 修红（run 44649139111 视觉走查实锤：mount before/after 两张全等=被 runner 终端窗遮挡，11-15 整改未落到本步）：
+# 截图前先唤浏览器窗到前台；浏览器窗不在则最小化当前前台终端窗，保证挂载证据拍到的是浏览器现场。
+Add-Type -Namespace Native -Name Win32MountSnap -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+'@
+function Prep-Snap([string]$ProcName) {
+  try {
+    $p = Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($p) {
+      [Native.Win32MountSnap]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+      [Native.Win32MountSnap]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+      Start-Sleep -Milliseconds 800
+      Write-Host ("  已唤 {0} 窗口到前台再拍（防遮挡）" -f $ProcName)
+    } else {
+      $fg = [Native.Win32MountSnap]::GetForegroundWindow()
+      if ($fg -ne [IntPtr]::Zero) { [Native.Win32MountSnap]::ShowWindow($fg, 6) | Out-Null; Start-Sleep -Milliseconds 500 }
+      Write-Host "  目标窗未起，已最小化前台终端窗再拍"
+    }
+  } catch { Write-Host ("  截图前置动作异常：{0}" -f $_.Exception.Message) }
+}
 
 function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [string]$ProfileDir, [int]$Rounds = 45) {
   Write-Host ("  {0} 版本: {1}" -f $Browser, (Get-Item $Exe).VersionInfo.ProductVersion)
@@ -193,10 +215,12 @@ foreach ($spec in $Browsers) {
     Write-Host ("  {0} 安装失败，记入未覆盖（报红不静默）" -f $spec.Name)
     continue
   }
+  Prep-Snap $spec.Proc
   Snap ("evidence\mount-{0}-before.png" -f $spec.Name.ToLower())
   $prof = Join-Path $PWD ("evidence\{0}-profile" -f $spec.Name.ToLower())
   $rounds = if ($spec.Rounds) { [int]$spec.Rounds } else { 45 }
   $hit = Test-BrowserMount -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof -Rounds $rounds
+  Prep-Snap $spec.Proc
   Snap ("evidence\mount-{0}-after.png" -f $spec.Name.ToLower())
   if (-not $hit) {
     Write-Host ("  {0} 插件未进用户资料，诊断补充 ===" -f $spec.Name)
@@ -207,6 +231,7 @@ foreach ($spec in $Browsers) {
       if (Test-Path (Join-Path $extDir 'manifest.json')) {
         Write-Host ("  {0} 登记 90*2 秒未自动挂载，转手动加载实测" -f $spec.Name)
         $hit = Test-BrowserManualLoad -Browser $spec.Name -Exe $exe -ProcName $spec.Proc -ProfileDir $prof -ExtDir $extDir
+        Prep-Snap $spec.Proc
         Snap ("evidence\mount-{0}-manual.png" -f $spec.Name.ToLower())
         if ($hit) {
           Write-Host ("  {0} 手动加载实测通过：path={1} state={2}（内核不认登记挂载，归入手动加载内核组，回灌文档）" -f $spec.Name, $hit.path, $hit.state)
