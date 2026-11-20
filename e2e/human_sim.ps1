@@ -1,4 +1,4 @@
-# requires -Version 7.0
+﻿# requires -Version 7.0
 <#
   真人模拟 24 用例云批（2026-11-15，v2 修红版）——覆盖账本见 推演/20261115-真人模拟云批.md
   v2 修红（红轮 run 43728875969 归因）：
@@ -375,6 +375,18 @@ function Find-AppExe {
     throw "找不到已安装的 TaoDown.exe"
 }
 function Start-App { Start-Process $script:appExe; Start-Sleep -Seconds 10; $null = Invoke-Button '知道了' 15; Start-Sleep -Seconds 2 }
+function Set-NumberValue([System.Windows.Automation.AutomationElement]$edit, [string]$text) {
+    # v2.4.3 修卷（run 44696397261 M34/M35 实锤）：ValuePattern.SetValue 对 WinUI NumberBox 内层 Edit
+    # 抛「Indices length does not match the array rank」——换真键盘输入通道：焦点+全选+键入
+    Add-Type -AssemblyName System.Windows.Forms
+    $null = $edit
+    $edit.SetFocus()
+    Start-Sleep -Milliseconds 400
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait($text)
+    Start-Sleep -Milliseconds 300
+}
 function Get-NumberInnerEdit([System.Windows.Automation.AutomationElement]$box) {
     # WinUI NumberBox 的 UIA 值在内层 Edit 上：优先按 ValuePattern 摸，摸不到再递归找 Edit
     try { $null = $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); return $box } catch { }
@@ -878,7 +890,7 @@ try {
             else {
                 $inner = Get-NumberInnerEdit $box
                 if (-not $inner) { throw 'NumberBox 内层 Edit 不可达' }
-                $inner.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1024')
+                Set-NumberValue $inner '1024'
                 if (-not (Invoke-Button '保存设置' 15)) { Record M34 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
                 else {
                     # 重启后引擎带参启动，进程命令行是对账锚点
@@ -895,7 +907,7 @@ try {
                     $b2 = $null
                     $w2 = Get-MainWindow
                     if ($w2) { $b2 = Find-ById $w2 'SpeedLimitBox' }
-                    if ($b2) { $i2 = Get-NumberInnerEdit $b2; if ($i2) { $i2.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0'); $null = Invoke-Button '保存设置' 15 } }
+                    if ($b2) { $i2 = Get-NumberInnerEdit $b2; if ($i2) { Set-NumberValue $i2 '0'; $null = Invoke-Button '保存设置' 15 } }
                     $null = Invoke-NavPage '下载'
                 }
             }
@@ -921,7 +933,7 @@ try {
             else {
                 $inner1 = Get-NumberInnerEdit $box
                 if (-not $inner1) { throw 'NumberBox 内层 Edit 不可达' }
-                $inner1.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1')
+                Set-NumberValue $inner1 '1'
                 if (-not (Invoke-Button '保存设置' 15)) { Record M35 SKIP '保存按钮不可达'; $null = Invoke-NavPage '下载' }
                 else {
                     for ($i = 1; $i -le 3; $i++) {
@@ -937,7 +949,7 @@ try {
                     # 复原上限=3
                     $null = Invoke-NavPage '设置'
                     $w3 = Get-MainWindow
-                    if ($w3) { $b3 = Find-ById $w3 'MaxConcurrentBox'; if ($b3) { $i3 = Get-NumberInnerEdit $b3; if ($i3) { $i3.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('3'); $null = Invoke-Button '保存设置' 15 } } }
+                    if ($w3) { $b3 = Find-ById $w3 'MaxConcurrentBox'; if ($b3) { $i3 = Get-NumberInnerEdit $b3; if ($i3) { Set-NumberValue $i3 '3'; $null = Invoke-Button '保存设置' 15 } } }
                     $null = Invoke-NavPage '下载'
                 }
             }
@@ -970,11 +982,11 @@ try {
                     Start-Sleep -Milliseconds 1500
                     $w36 = Get-MainWindow
                     if ($w36) {
-                        foreach ($it in (Find-WalkAll $w36 { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })) {
-                            if ($it.Current.Name -like '*深色*' -or $it.Current.Name -like '*浅色*' -or $it.Current.Name -like '*主题*') {
-                                try { $it.Select(); $picked = $true; break } catch { continue }
-                            }
-                        }
+                        # v2.4.3 修卷：三象主题项名=水墨/天灰/墨夜，旧过滤「深色/浅色/主题」永不命中（SKIP 根因）；
+                        # 弹层 ListItem 依序取第二项（切离默认主题），不猜名字
+                        $items = @(Find-WalkAll $w36 { param($e) try { $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem } catch { return $false } })
+                        Write-Host ("  M36 弹层 ListItem: {0}" -f (($items | ForEach-Object { $_.Current.Name }) -join ' | '))
+                        if ($items.Count -ge 2) { try { $items[1].Select(); $picked = $true } catch { } }
                     }
                     Start-Sleep -Milliseconds 800
                     try { (Get-MainWindow).SetFocus() } catch { }

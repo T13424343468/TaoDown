@@ -1,4 +1,4 @@
-# 云端真机「自动挂载」验证（v2.4.x 全内核覆盖版）：
+﻿# 云端真机「自动挂载」验证（v2.4.x 全内核覆盖版）：
 # ① 登记核验：BrowserCatalog 全家族 Extensions\<扩展ID> 键（HKCU 必查），path 指向真实插件包、version 与清单一致，旧 ID 键必须清干净；
 # ② 真挂载核验·全内核覆盖：对自动挂载清单内的全部 Chromium 内核浏览器——Edge、Chrome、Chromium、Brave、Vivaldi、Yandex——
 #    runner 上没有的现场安装（choco 优先、winget 兜底），逐个真启动，扩展 ID 必须进入用户资料（Secure Preferences/Preferences）；
@@ -111,6 +111,9 @@ function Test-BrowserMount([string]$Browser, [string]$Exe, [string]$ProcName, [s
     }
     if ($found) { break }
   }
+  # v2.4.3 修卷（run 44692161408 视觉走查实锤）：挂载命中后浏览器还活着，先拍「浏览器在窗」证据再杀；
+  # 主循环的 after 拍在杀进程之后，永远只能拍到桌面（Prep-Snap 找不到目标窗）
+  if ($found) { Prep-Snap $ProcName; Snap ("evidence\mount-{0}-mounted.png" -f $Browser.ToLower()) }
   Get-Process $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
   return $found

@@ -199,9 +199,10 @@ try {
     $t0 = Get-Date
     Start-Process $appExe -ArgumentList "`"http://127.0.0.1:$port/big.bin`""
     Start-Sleep -Seconds 120
-    Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force
+    # v2.4.3 修卷（run 44692161408 视觉走查实锤）：杀前拍，窗还活着才是「下载中」证据；杀后拍只能拍到桌面
     Prep-Snap "TaoDown"
     Snap (Join-Path $evd "A-kill-mid-download.png")
+    Get-Process TaoDown -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } | Stop-Process -Force
     Write-Host "A: 下载推进 120 秒后强制崩溃，落证据。"
 
     Start-Process $appExe -ArgumentList "`"http://127.0.0.1:$port/big.bin`""
