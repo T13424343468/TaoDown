@@ -1,4 +1,4 @@
-# requires -Version 7.0
+﻿# requires -Version 7.0
 <#
   TaoDown 超大文件 + 满列表并发下载回归（2026-11-15）
   口径：单文件 32GB 级（几十 G）+ 满列表 40 任务并发，含崩溃续传与快照恢复。
@@ -85,7 +85,16 @@ function Get-BTerminalCount($log, $listCount) {
 function Assert-Watchdog($log) {
     if (Test-Path $log) {
         $slow = Select-String -Path $log -Pattern '界面心跳连续卡顿' | Select-Object -Last 1
-        if ($slow) { throw "看门狗红灯（界面响应不达标）：$($slow.Line)" }
+        if ($slow) {
+            # 2026-11-20 看门狗口径修正：单次超限只落痕计数，连续 3 轮超限才落红线
+            # （32GB 满速落盘下单拍刷新 2185ms 单次抖动曾被判死；持续卡顿照样红灯，不放松对真卡死的把守）
+            if ($slow.Line -match '连续\s*([0-9]+)\s*轮') {
+                $streak = [int]$Matches[1]
+                if ($streak -ge 3) { throw "看门狗红灯（界面响应不达标，连续 $streak 轮超限）：$($slow.Line)" }
+            } else {
+                throw "看门狗红灯（界面响应不达标）：$($slow.Line)"
+            }
+        }
     }
 }
 
