@@ -33,10 +33,10 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 .NET 8 SDK
+      - name: 安装 .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: 还原依赖
         run: dotnet restore src/TaoDown.App/TaoDown.App.csproj
@@ -44,10 +44,10 @@ jobs:
       - name: 核心单元测试（含代码覆盖率采集）
         run: dotnet test src/TaoDown.Core.Tests/TaoDown.Core.Tests.csproj -c Release --nologo -v q --collect:"XPlat Code Coverage" --results-directory coverage
 
-      - name: 云端 Windows 编译（Release x64 自包含）
+      - name: 云端出包（Release x64 框架依赖——安装包不内置 .NET 运行时）
         run: >
           dotnet publish src/TaoDown.App/TaoDown.App.csproj -c Release -r win-x64
-          --self-contained true -p:WindowsAppSDKSelfContained=true -p:Platform=x64
+          --self-contained false -p:Platform=x64
 
       - name: 定位发布目录
         shell: pwsh
@@ -105,9 +105,7 @@ jobs:
             return $null
           }
           $msi = (Resolve-Path out/*.msi).Path
-          $p = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart","/l*v","evidence\install.log" -Wait -PassThru
-          Write-Host "msiexec 退出码: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { throw "静默安装失败，退出码 $($p.ExitCode)" }
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" /qn /norestart /l*v evidence\install.log" -LogPath evidence\install.log
           $appExe = Find-AppExe
           if (-not $appExe) { throw "安装后所有常规盘符都找不到 TaoDown.exe" }
           Write-Host "安装位置: $appExe"
@@ -124,6 +122,19 @@ jobs:
           Start-Sleep -Seconds 2
           Write-Host "真实用户视角：静默安装、启动、稳定运行均通过"
 
+      - name: 【关1.5·新标准】 运行时两路断言（有运行时零下载）
+        shell: pwsh
+        run: |
+          # 全系安装器新标准断言一: 云台 SDK 自带 .NET 桌面运行时, .NET 必须零下载直接用;
+          # 界面框架与 VC++ 云台没有, 缺则联网装齐 (present 或 download-install ok 均算保障到位)
+          $log = Join-Path $env:ProgramData 'TaoDown\taodown-runtime.log'
+          if (-not (Test-Path $log)) { throw "运行时保障日志缺失: $log" }
+          $lines = Get-Content $log
+          if (-not ($lines | Where-Object { $_ -match 'runtime-present zero-download' })) { throw ".NET 未走零下载路: $($lines -join '; ')" }
+          if (-not ($lines | Where-Object { $_ -match 'winappruntime-(present zero-download|download-install ok)' })) { throw "界面框架运行时未装齐: $($lines -join '; ')" }
+          if (-not ($lines | Where-Object { $_ -match 'vcruntime-(present zero-download|download-install ok)' })) { throw "VC++ 运行库未装齐: $($lines -join '; ')" }
+          Write-Host "运行时断言一通过：.NET 零下载直用，界面框架/VC++ 保障到位"
+
       - name: 【关2·功能】 真人模拟 24 用例云批（UIA 真界面驱动 + 真源 SHA 对账）
         if: env.SCENARIO != 'bigfile'
         shell: pwsh
@@ -133,6 +144,10 @@ jobs:
       - name: 【关3·好用】 自动挂载全链验证（登记核验+全内核真挂载）
         shell: pwsh
         run: ./tools/verify_mount.ps1
+
+      - name: 【关3.5·接管】 六家浏览器下载接管实测（真触发下载, 非只验挂载）
+        shell: pwsh
+        run: ./tools/verify_takeover.ps1
 
       - name: 【关4·复杂】 超大文件+满列表并发回归（32GB 断点续传 + 40 任务并发 + 崩溃恢复）
         # always() 保留 v4 修红口径：同场时真人模拟红灯不连带跳过大文件闸，两闸各自暴露问题；
@@ -322,22 +337,30 @@ jobs:
             $g.Dispose(); $bmp.Dispose()
           }
           $msi = (Resolve-Path out/*.msi).Path
-          $p1 = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart" -Wait -PassThru
-          if ($p1.ExitCode -ne 0) { throw "覆盖安装失败，退出码 $($p1.ExitCode)" }
-          Write-Host "覆盖安装退出码: $($p1.ExitCode)"
-          $p2 = Start-Process msiexec.exe -ArgumentList "/x","`"$msi`"","/qn","/norestart" -Wait -PassThru
-          if ($p2.ExitCode -ne 0) { throw "静默卸载失败，退出码 $($p2.ExitCode)" }
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" /qn /norestart /l*v out\cover.log" -LogPath out\cover.log
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/x `"$msi`" /qn /norestart /l*v out\uninstall.log" -LogPath out\uninstall.log
           Start-Sleep -Seconds 3
           $gone = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                   Where-Object { $_.DisplayName -like "*TaoDown*" }
           if ($gone) { throw "卸载后注册表仍有残留条目" }
           Write-Host "卸载校验：注册表无残留"
-          $p3 = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart" -Wait -PassThru
-          if ($p3.ExitCode -ne 0) { throw "重装失败，退出码 $($p3.ExitCode)" }
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" /qn /norestart /l*v out\reinstall.log" -LogPath out\reinstall.log
           Start-Sleep -Seconds 5
           (New-Object -ComObject WScript.Shell).AppActivate('TaoDown') | Out-Null
           Snap "evidence\l8-reinstall.png"
           Write-Host "升级与回滚路径：覆盖安装、静默卸载、重装均通过"
+
+          # ---- 全系安装器新标准断言二: 强制三项全走下载路, 官方运行时装齐后以实测为准 ----
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/x `"$msi`" /qn /norestart /l*v out\uninstall2.log" -LogPath out\uninstall2.log
+          Remove-Item (Join-Path $env:ProgramData 'TaoDown\taodown-runtime.log') -Force -ErrorAction SilentlyContinue
+          ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" TAODOWNFORCE=1 /qn /norestart /l*v out\forced-runtime.log" -LogPath out\forced-runtime.log
+          $log = Join-Path $env:ProgramData 'TaoDown\taodown-runtime.log'
+          if (-not (Test-Path $log)) { throw "运行时保障日志缺失: $log" }
+          $lines = Get-Content $log
+          if (-not ($lines | Where-Object { $_ -match 'runtime-download-install ok' })) { throw ".NET 强制下载路未装齐: $($lines -join '; ')" }
+          if (-not ($lines | Where-Object { $_ -match 'winappruntime-download-install ok' })) { throw "界面框架强制下载路未装齐: $($lines -join '; ')" }
+          if (-not ($lines | Where-Object { $_ -match 'vcruntime-download-install ok' })) { throw "VC++ 强制下载路未装齐: $($lines -join '; ')" }
+          Write-Host "运行时断言二通过：TAODOWNFORCE=1 三项运行时官方渠道下载装齐"
 
       - name: 【关8·对账】 上传测试证据与安装包
         if: always()

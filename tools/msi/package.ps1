@@ -92,6 +92,14 @@ $publishRoot = (Resolve-Path $PublishDir).Path
 
 
 
+# ---- 全系安装器运行时新标准 (2026-11-21 老板令): 安装包不内置运行时 ----
+# 安装期由 EnsureRuntime.ps1 检测/补装三项运行时; 脚本随发布文件进包 (递归枚举自动收)。
+$rtSrc = Join-Path $PSScriptRoot 'EnsureRuntime.ps1'
+if (-not (Test-Path $rtSrc)) { throw "运行时保障脚本缺失: $rtSrc (请使用完整包)" }
+Copy-Item $rtSrc (Join-Path $publishRoot 'EnsureRuntime.ps1') -Force
+
+
+
 
 
 if (-not (Test-Path (Join-Path $publishRoot 'TaoDown.exe'))) {
@@ -377,6 +385,23 @@ $wxs = @"
 
                   Execute="immediate" Return="ignore" />
 
+    <!-- 运行时保障 (2026-11-21 全系安装器新标准): 装完文件后检测/补装三项运行时
+         (.NET 10 桌面 / 界面框架 WinAppSDK 1.5 / VC++ 2015-2022), 卸载 REMOVE 时跳过;
+         失败即回滚, 无网时脚本弹通俗重试指引。必须是 deferred: immediate CA 在
+         InstallFinalize 落盘脚本执行前跑, EnsureRuntime.ps1 还没装到盘上, powershell
+         -File 找不到文件秒退 (TaoZip run 44877397577 实锤); deferred 排在 InstallFiles
+         后即落盘后执行。64 位 PowerShell (System64Folder): 32 位 PS 下注册表被重定向
+         漏检 (TaoZip run 44875970874 实锤)。cmd 包一层把 PS 报错重定向落盘拿第一手输出。 -->
+    <!-- 云测钩子属性: 断言二强制走下载路。环境变量传不进 msiexec 服务上下文
+         (TaoZip run 44885229031 实锤), 改走 MSI 公共属性: msiexec /i xxx.msi TAODOWNFORCE=1 -->
+    <Property Id="TAODOWNFORCE" Secure="yes" />
+    <!-- 版面铁律 (TaoPad run 44901597525 实锤 1721): SetProperty 必须写在 InstallExecuteSequence
+         之前——同挂 After="InstallFiles" 的动作按源码顺序编号, 反过来写会让 EnsureRuntimes
+         先于 RTENSURECMD 求值, 起跑时属性还是空的, cmd 没起来直接 1721→1603 -->
+    <SetProperty Id="RTENSURECMD" After="InstallFiles" Sequence="execute"
+                 Value="[System64Folder]cmd.exe" />
+    <CustomAction Id="EnsureRuntimes" Property="RTENSURECMD" Execute="deferred" Return="check" Impersonate="no"
+                  ExeCommand="/c mkdir &quot;[CommonAppDataFolder]TaoDown&quot; 2&gt;nul &amp; set &quot;TAODOWN_FORCE_RUNTIME_DOWNLOAD=[TAODOWNFORCE]&quot; &amp; &quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]EnsureRuntime.ps1&quot; &gt;&gt; &quot;[CommonAppDataFolder]TaoDown\ca-out.txt&quot; 2&gt;&amp;1" />
     <InstallExecuteSequence>
 
       <Custom Action="SetKillCmd" After="InstallValidate" />
@@ -386,6 +411,8 @@ $wxs = @"
       <Custom Action="SetKillCmdHost" After="KillRunningTaoDown" />
 
       <Custom Action="KillRunningTaoDownHost" After="SetKillCmdHost" />
+
+      <Custom Action="EnsureRuntimes" After="InstallFiles" Condition="NOT REMOVE" />
 
       <Custom Action="SetDefaultInstallDir" Before="CostFinalize" />
 
