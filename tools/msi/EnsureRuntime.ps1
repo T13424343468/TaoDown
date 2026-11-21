@@ -1,7 +1,7 @@
 ﻿# TaoDown 安装器运行时保障 (2026-11-21 全系安装器新标准, 老板令; v97 三运行时统一)
 # 口径: 安装包不内置任何运行时; 安装期以系统实际为准全盘检测三项运行时:
 #   1) .NET 10 桌面运行时   —— 缺则联网下官方 dotnet-install 脚本装进 C:\Program Files\dotnet
-#   2) Windows App SDK 运行时 (界面框架, 1.5) —— 缺则联网下官方 WindowsAppRuntimeInstall-x64.exe 静默装
+#   2) Windows App SDK 运行时 (界面框架, 1.8) —— 缺则联网下官方 WindowsAppRuntimeInstall-x64.exe 静默装
 #   3) VC++ 2015-2022 运行库 —— 缺则联网下官方 vc_redist.x64.exe 静默装
 #   有则零下载直接用; 无网且无运行时给通俗重试指引。
 # 云测钩子: TAODOWN_FORCE_RUNTIME_DOWNLOAD=1 强制三项全走下载路 (断言二用), 日常安装不设即走检测路。
@@ -92,9 +92,9 @@ if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-DesktopRuntime10)) {
     Write-RtLog 'runtime-download-install ok'
 }
 
-# ---- 2) Windows App SDK 运行时 (界面框架, 1.5) ----
+# ---- 2) Windows App SDK 运行时 (界面框架, 1.8) ----
 # v1.1.2 自带改依赖: 界面框架不再打进安装包, 改装时保障。
-# 检测口径双保险: Appx 包查询 (Microsoft.WindowsAppRuntime.1.5*) 优先, 异常回落
+# 检测口径双保险: Appx 包查询 (Microsoft.WindowsAppRuntime.1.8*) 优先, 异常回落
 #   C:\Program Files\WindowsApps 目录探针 (SYSTEM 可枚举); 任一命中即算在位。
 # 安装口径: 官方 WindowsAppRuntimeInstall-x64.exe 静默装 (--quiet, 微软 winget 官方清单实锤);
 #   它内部走 AppX 部署服务装 MSIX 并 provisioning 给全体用户, 不走 MSI 链, 与本产品 MSI
@@ -102,11 +102,11 @@ if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-DesktopRuntime10)) {
 function Test-WinAppRuntime {
     try {
         # -AllUsers: msiexec 以 SYSTEM 执行, 普通查询只看 SYSTEM 用户包, provisioned 包会漏检
-        $hit = Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.1.5*' -ErrorAction Stop
+        $hit = Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.1.8*' -ErrorAction Stop
         if ($hit) { return $true }
     } catch { }
     try {
-        if (Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.1.5_*' -Directory -ErrorAction SilentlyContinue) { return $true }
+        if (Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.1.8_*' -Directory -ErrorAction SilentlyContinue) { return $true }
     } catch { }
     return $false
 }
@@ -115,7 +115,7 @@ if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-WinAppRuntime)) {
 } else {
     Write-RtLog 'winappruntime-missing, downloading official runtime installer'
     $waExe = Join-Path $env:TEMP 'WindowsAppRuntimeInstall-x64.exe'
-    if (-not (Get-OfficialFile 'https://aka.ms/windowsappsdk/1.5/latest/windowsappruntimeinstall-x64.exe' $waExe)) {
+    if (-not (Get-OfficialFile 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe' $waExe)) {
         Show-NoNetwork '界面框架运行时' 62
         exit 1602
     }
