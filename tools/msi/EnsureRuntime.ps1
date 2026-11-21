@@ -106,6 +106,12 @@ function Test-WinAppRuntime {
         # 应用启动仍弹 'Windows App Runtime 1.8 missing'; 应用依赖的是 Main 主框架包, 检测必须查 Main
         $hit = Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction Stop
         if ($hit) { return $true }
+    } catch {
+        Write-RtLog ("appx-allusers-query-failed " + $_.Exception.Message)
+    }
+    # 回落: 当前用户视角再查一次 (-AllUsers 在个别 SYSTEM 上下文可能抛错)
+    try {
+        if (Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction Stop) { return $true }
     } catch { }
     try {
         if (Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.Main.1.8_*' -Directory -ErrorAction SilentlyContinue) { return $true }
@@ -122,14 +128,39 @@ if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-WinAppRuntime)) {
         exit 1602
     }
     Write-RtLog 'winappruntime-download-ok, installing silently'
+    # run 44921050855 实锤: 安装器在 SYSTEM 上下文静默失败时只记退出码不作为, 验证 31336 却无第一手输出;
+    #   退出码非 0/3010 重试一次, 安装器 stdout/stderr 落盘回灌 runtime log
+    $waOut = Join-Path $env:TEMP 'wa-install-out.txt'
+    $waErr = Join-Path $env:TEMP 'wa-install-err.txt'
     try {
-        $p = Start-Process -FilePath $waExe -ArgumentList '--quiet' -Wait -PassThru -NoNewWindow
+        $p = Start-Process -FilePath $waExe -ArgumentList '--quiet' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $waOut -RedirectStandardError $waErr
         Write-RtLog ("winappruntime-installer exit=" + $p.ExitCode)
+        foreach ($f in @($waOut, $waErr)) {
+            if (Test-Path $f) {
+                $t = (Get-Content $f -Raw -ErrorAction SilentlyContinue)
+                if ($t) { Write-RtLog ("wa-output " + ($t -replace '\r?\n', ' | ').Trim()) }
+            }
+        }
+        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            Write-RtLog 'winappruntime-installer nonzero exit, retry once'
+            Start-Sleep -Seconds 5
+            $p2 = Start-Process -FilePath $waExe -ArgumentList '--quiet' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $waOut -RedirectStandardError $waErr
+            Write-RtLog ("winappruntime-installer retry exit=" + $p2.ExitCode)
+            foreach ($f in @($waOut, $waErr)) {
+                if (Test-Path $f) {
+                    $t = (Get-Content $f -Raw -ErrorAction SilentlyContinue)
+                    if ($t) { Write-RtLog ("wa-retry-output " + ($t -replace '\r?\n', ' | ').Trim()) }
+                }
+            }
+        }
     } catch {
         Write-RtLog ("winappruntime-install failed " + $_.Exception.Message)
         exit 31334
     }
-    if (-not (Test-WinAppRuntime)) { Write-RtLog 'winappruntime-verify-failed'; exit 31336 }
+    if (-not (Test-WinAppRuntime)) {
+        Start-Sleep -Seconds 10
+        if (-not (Test-WinAppRuntime)) { Write-RtLog 'winappruntime-verify-failed'; exit 31336 }
+    }
     Write-RtLog 'winappruntime-download-install ok'
 }
 

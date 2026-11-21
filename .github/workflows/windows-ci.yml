@@ -105,12 +105,19 @@ jobs:
             return $null
           }
           $msi = (Resolve-Path out/*.msi).Path
-          ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" /qn /norestart /l*v evidence\install.log" -LogPath evidence\install.log
+          # 诊断盲区回灌 (run 44908603086 实锤): CA 执行痕迹只在 ProgramData, 不取回则误判无从查起
+          # run 44921050855 实锤: 安装失败时 invoke-msi 抛错中断, 取回步骤执行不到, 修红归因断粮;
+          #   改为 try/catch 包裹, 失败也先取回 runtime log 与 CA 输出再抛
+          New-Item -ItemType Directory -Force -Path evidence\runtime-diag | Out-Null
+          try {
+            ./tools/msi/invoke-msi.ps1 -MsiArgs "/i `"$msi`" /qn /norestart /l*v evidence\install.log" -LogPath evidence\install.log
+          } catch {
+            Copy-Item "C:\ProgramData\TaoDown\*" evidence\runtime-diag\ -Force -ErrorAction SilentlyContinue
+            throw
+          }
           $appExe = Find-AppExe
           if (-not $appExe) { throw "安装后所有常规盘符都找不到 TaoDown.exe" }
           Write-Host "安装位置: $appExe"
-          # 诊断盲区回灌 (run 44908603086 实锤): CA 执行痕迹只在 ProgramData, 不取回则误判无从查起
-          New-Item -ItemType Directory -Force -Path evidence\runtime-diag | Out-Null
           Copy-Item "C:\ProgramData\TaoDown\*" evidence\runtime-diag\ -Force -ErrorAction SilentlyContinue
           Start-Process $appExe
           Start-Sleep -Seconds 15
