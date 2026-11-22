@@ -134,21 +134,42 @@ foreach ($spec in $Browsers) {
   $prof = Join-Path $PWD ("evidence\takeover-{0}-profile" -f $spec.Name.ToLower())
   Remove-Item $prof -Recurse -Force -ErrorAction SilentlyContinue
   # --enable-logging: SW 控制台与 native messaging 报错落 chrome_debug.log (run 44991534420 六家全不接管却无浏览器侧第一手日志, 归因断粮)
-  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--user-data-dir=`"$prof`"", "about:blank"
+  # --load-extension: run 44999835778 取证实锤——注册表外挂 CRX 在新内核装成禁用态 (disable_reasons 256=DISABLE_NOT_VERIFIED,
+  #   8192=DISABLE_EXTERNAL_EXTENSION, 六家全中), SW 从未运行接管无从谈起; 未打包加载必然启用, 本步实测的是接管行为本身,
+  #   登记挂载路径由关3 单独覆盖。扩展目录与 verify_mount 手动加载路同源。
+  $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
+  Write-Host ("  扩展以未打包方式加载 (注册表外挂在新内核被禁用): " + $extDir)
+  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
   $mounted = Wait-ExtensionMounted $prof 45
   if (-not $mounted) {
     Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     $failed.Add("$($spec.Name)：扩展未进用户资料，接管无从谈起")
     continue
   }
-  Write-Host ("  {0} 扩展已挂载，触发下载: {1}" -f $spec.Name, $Url)
+  # 启用态取证 (run 44999835778 教训): 挂载≠启用, disable_reasons 非空即当场报红
+  $dr = $null
+  foreach ($file in @('Secure Preferences', 'Preferences')) {
+    $pf2 = Join-Path $prof "Default\$file"
+    if (-not (Test-Path $pf2)) { continue }
+    try {
+      $j = Get-Content $pf2 -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $es = $j.extensions.settings
+      if ($es -and ($es.PSObject.Properties.Name -contains $Id)) { $dr = $es.$Id.disable_reasons; break }
+    } catch { continue }
+  }
+  if ($dr -and @($dr).Count -gt 0) {
+    Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $failed.Add("$($spec.Name)：扩展被浏览器禁用 (disable_reasons=$($dr -join ','))，接管无从谈起")
+    continue
+  }
+  Write-Host ("  {0} 扩展已挂载且启用，触发下载: {1}" -f $spec.Name, $Url)
 
   $inboxBefore = @(Test-InboxHit).Count
   # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "http://127.0.0.1:$Port/warmup.bin"
+  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
   Start-Sleep -Seconds 8
   Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", $Url
+  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--load-extension=`"$extDir`"", $Url
   $taken = $null
   for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 2
