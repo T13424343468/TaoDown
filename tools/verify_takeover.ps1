@@ -58,7 +58,7 @@ $srcPs.Runspace = $srcRs
       $ctx.Response.ContentType = 'application/octet-stream'
       $ctx.Response.ContentLength64 = $body.Length
       $fname = if ($ctx.Request.Url.AbsolutePath -like '*warmup*') { 'warmup.bin' } else { 'takeover.bin' }
-      $ctx.Response.AddHeader('Content-Disposition', "attachment; filename=\"$fname\"")
+      $ctx.Response.AddHeader('Content-Disposition', "attachment; filename=`"$fname`"")
       $ctx.Response.OutputStream.Write($body, 0, $body.Length)
       $ctx.Response.OutputStream.Close()
     }
