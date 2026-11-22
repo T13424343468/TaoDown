@@ -1297,6 +1297,22 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
 
     private readonly Dictionary<string, int> _stallRestarts = new();   // taskId -> 已自动续传次数
 
+    /// <summary>
+    /// 文件落盘完整性救援（run 45033054105 实锤）：32GB 任务停滞换号 2 次用尽被判 Error 终态，
+    /// 引擎侧 27 秒后 Download complete 却因任务已终态被忽略——文件其实早已写满。
+    /// 判终态失败前先看磁盘：文件存在且长度 ≥ 总字节（TotalBytes&gt;0 时），按 Complete 处理，不误报 Error。
+    /// </summary>
+    private bool TryRescueCompleteFile(DownloadTask task)
+    {
+        if (task.TotalBytes <= 0 || string.IsNullOrEmpty(task.FilePath)) return false;
+        try
+        {
+            var fi = new FileInfo(task.FilePath);
+            return fi.Exists && fi.Length >= task.TotalBytes;
+        }
+        catch { return false; }
+    }
+
     private void DetectStall(DownloadTask task)
 
     {
@@ -1354,6 +1370,24 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             {
 
                 // 红3 同口径：只改状态，事件留给锁外统一触发（exhausted 非空即有待通知任务）。
+
+                // run 45033054105 实锤：判 Error 前先做文件落盘完整性救援——文件已写满按 Complete 处理，
+
+                // 否则引擎侧随后的 Download complete 被终态忽略，任务假死在 Error。
+
+                if (TryRescueCompleteFile(task))
+
+                {
+
+                    task.Status = DownloadStatus.Complete;
+
+                    task.Error = null;
+
+                    exhausted = task;
+
+                    return;
+
+                }
 
                 task.Status = DownloadStatus.Error;
 
@@ -1683,11 +1717,21 @@ public sealed class Aria2DownloadService : IDownloadService, IDisposable
             mapped = DownloadStatus.Waiting;
             transientRetry = true;
         }
-        else if (mapped is DownloadStatus.Error or DownloadStatus.Complete)
+        else
         {
-            lock (_gate)
+            // run 45033054105 实锤：重试到顶（或非暂时性）判 Error 前，先做文件落盘完整性救援——
+            // 引擎侧文件已写满的（如停滞换号期间引擎仍在续传，完成事件晚于终态判定），按 Complete 处理。
+            if (mapped == DownloadStatus.Error && TryRescueCompleteFile(task))
             {
-                _transientRetries.Remove(task.Id); // 真·终态：重试账目清零
+                mapped = DownloadStatus.Complete;
+                task.Error = null;
+            }
+            if (mapped is DownloadStatus.Error or DownloadStatus.Complete)
+            {
+                lock (_gate)
+                {
+                    _transientRetries.Remove(task.Id); // 真·终态：重试账目清零
+                }
             }
         }
 

@@ -141,8 +141,13 @@ $report = [ordered]@{}
 # 「接管注册表已刷新 插件外链=17」), 清完 28s 内被回写, Chrome 启动时外部登记在位 → 仍 location=3
 # + 8192。修法: 先停主程序再清 HKCU+HKLM 双蜂巢 (收件箱由宿主独立落盘, TaoDown.Host 只写 inbox
 # 不依赖主程序, 接管判定不受影响; 关4 bigfile_regression 自行拉起应用)。
-Get-Process 'TaoDown' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# run 45033054105 实锤: Get-Process 'TaoDown' 杀不中主程序 (应用宿主进程名不叫 TaoDown, 可执行文件
+# Path 才含 TaoDown), 清键后 28s 被每 30s 刷新的接管注册表回写, Chrome 启动时外部登记在位 → 仍
+# location=3+8192。改为按可执行文件 Path 多路匹配强杀, 杀完断言进程清零。
+Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
+$leftApp = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') })
+if ($leftApp.Count -gt 0) { throw ("主程序未杀净: " + (($leftApp | ForEach-Object { "$($_.Id):$($_.Path)" }) -join '; ')) }
 $extRegRoots = @(
   'HKCU:\Software\Google\Chrome\Extensions',
   'HKLM:\Software\Google\Chrome\Extensions',
@@ -165,9 +170,14 @@ foreach ($root in $extRegRoots) {
   try {
     if (Test-Path $root) {
       Remove-Item (Join-Path $root $Id) -Recurse -Force -ErrorAction SilentlyContinue
+      # run 45033054105 教训: Remove-Item 失败被 SilentlyContinue 吞掉仍打印成功——清完必须 Test-Path 断言
+      if (Test-Path (Join-Path $root $Id)) { throw "清后仍存在" }
       Write-Host ("  清外部登记 {0}\{1}" -f $root, $Id)
     }
-  } catch { Write-Host ("  外部登记清理失败 {0}: {1}" -f $root, $_.Exception.Message) }
+  } catch {
+    Write-Host ("  外部登记清理失败 {0}: {1}" -f $root, $_.Exception.Message)
+    $failed.Add("外部登记清理失败 ${root}（清后仍存在，主程序回写或权限不足）")
+  }
 }
 # 企业策略显式放行 (run 45004083646 实锤): 逐家写 ExtensionSettings 策略放行扩展 ID, 兜住个别内核
 # 对未打包加载的额外拦截; run 45014250527 实锤 force_installed 对非商店来源无效 (低信任强制安装
@@ -209,9 +219,16 @@ foreach ($spec in $Browsers) {
   #   保留的恢复路, Selenium 4.34 同款实测可行), 六家统一恢复未打包加载。
   $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
   Write-Host ("  扩展以未打包方式加载 (注册表外挂在新内核被禁用): " + $extDir)
-  # 逐家开跑前再清一遍登记键（run 45029338370 教训：任何残留登记都会把实例并回外部安装路）
+  # 逐家开跑前再停主程序、再清一遍登记键并断言（run 45029338370/45033054105 教训：主程序存活时
+  # 每 30s 周期回写登记键，任何残留都会把实例并回外部安装路）
+  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') } | Stop-Process -Force -ErrorAction SilentlyContinue
   foreach ($root in $extRegRoots) {
-    try { if (Test-Path $root) { Remove-Item (Join-Path $root $Id) -Recurse -Force -ErrorAction SilentlyContinue } } catch { }
+    try {
+      if (Test-Path $root) {
+        Remove-Item (Join-Path $root $Id) -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path (Join-Path $root $Id)) { throw "清后仍存在" }
+      }
+    } catch { $failed.Add("$($spec.Name)：开跑前外部登记清不干净 $root") }
   }
   Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
   $mounted = Wait-ExtensionMounted $prof 45
