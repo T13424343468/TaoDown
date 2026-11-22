@@ -57,7 +57,8 @@ $srcPs.Runspace = $srcRs
       $ctx = $s.GetContext()
       $ctx.Response.ContentType = 'application/octet-stream'
       $ctx.Response.ContentLength64 = $body.Length
-      $ctx.Response.AddHeader('Content-Disposition', 'attachment; filename="takeover.bin"')
+      $fname = if ($ctx.Request.Url.AbsolutePath -like '*warmup*') { 'warmup.bin' } else { 'takeover.bin' }
+      $ctx.Response.AddHeader('Content-Disposition', "attachment; filename=\"$fname\"")
       $ctx.Response.OutputStream.Write($body, 0, $body.Length)
       $ctx.Response.OutputStream.Close()
     }
@@ -132,7 +133,8 @@ foreach ($spec in $Browsers) {
   # 每家独立资料目录：扩展按登记自动挂载（与 verify_mount 同机制）
   $prof = Join-Path $PWD ("evidence\takeover-{0}-profile" -f $spec.Name.ToLower())
   Remove-Item $prof -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--user-data-dir=`"$prof`"", "about:blank"
+  # --enable-logging: SW 控制台与 native messaging 报错落 chrome_debug.log (run 44991534420 六家全不接管却无浏览器侧第一手日志, 归因断粮)
+  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--user-data-dir=`"$prof`"", "about:blank"
   $mounted = Wait-ExtensionMounted $prof 45
   if (-not $mounted) {
     Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -142,6 +144,10 @@ foreach ($spec in $Browsers) {
   Write-Host ("  {0} 扩展已挂载，触发下载: {1}" -f $spec.Name, $Url)
 
   $inboxBefore = @(Test-InboxHit).Count
+  # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
+  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "http://127.0.0.1:$Port/warmup.bin"
+  Start-Sleep -Seconds 8
+  Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
   Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", $Url
   $taken = $null
   for ($i = 0; $i -lt 30; $i++) {
@@ -170,7 +176,10 @@ foreach ($spec in $Browsers) {
 }
 
 # 失败取证 (run 44988339377 教训——六家全不接管却无宿主侧第一手证据, 归因断粮):
-# 宿主日志尾部 + NativeMessagingHosts 登记键实况落盘, 接管链断在哪一环当场可查
+# run 44921050855 实锤教训: 上一版诊断查 NativeMessagingHosts\<扩展ID> 是错键名, 登记器写的是
+# NativeMessagingHosts\com.tao.taodown (HostName), 查错键等于没查。本轮: 正确键实况 + manifest
+# 内容 + 宿主直启冒烟 (绕开浏览器直接喂 precheck 帧, 把「宿主能不能跑」与「浏览器找没找到宿主」拆开) + 启动日志尾部。
+$HostName = 'com.tao.taodown'
 $diag = New-Object System.Collections.Generic.List[string]
 foreach ($l in $HostLogs) {
   if (Test-Path $l) {
@@ -178,12 +187,72 @@ foreach ($l in $HostLogs) {
     Get-Content $l -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add($_) }
   } else { $diag.Add("=== host.log 不存在: $l ===") }
 }
-$diag.Add('=== NativeMessagingHosts 登记键实况 ===')
+foreach ($l in @('D:\TaoDownData\TaoDown\logs\startup.log', "$env:LOCALAPPDATA\TaoDownData\TaoDown\logs\startup.log")) {
+  if (Test-Path $l) {
+    $diag.Add("=== startup.log: $l ===")
+    Get-Content $l -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add($_) }
+  } else { $diag.Add("=== startup.log 不存在: $l ===") }
+}
+$diag.Add('=== NativeMessagingHosts 登记键实况 (正确键名 com.tao.taodown) ===')
+$manifestPath = $null
 foreach ($root in @('Software\Google\Chrome\NativeMessagingHosts','Software\Microsoft\Edge\NativeMessagingHosts','Software\Chromium\NativeMessagingHosts','Software\BraveSoftware\Brave\NativeMessagingHosts','Software\Vivaldi\NativeMessagingHosts','Software\Yandex\YandexBrowser\NativeMessagingHosts')) {
-  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$root\$Id")
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$root\$HostName")
   $val = if ($key) { $key.GetValue($null) } else { '<键缺失>' }
+  if (-not $manifestPath -and $val -and (Test-Path $val)) { $manifestPath = $val }
   $manifestOk = ($val -and (Test-Path $val))
-  $diag.Add("$root\$Id = $val (清单文件存在=$manifestOk)")
+  $diag.Add("$root\$HostName = $val (清单文件存在=$manifestOk)")
+}
+if ($manifestPath) {
+  $diag.Add("=== 宿主 manifest 内容: $manifestPath ===")
+  Get-Content $manifestPath -Raw -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add($_) }
+  try {
+    $mf = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    $hostExe = $mf.path
+    $diag.Add("宿主 exe 在位=$(Test-Path $hostExe) ($hostExe)")
+    # 宿主直启冒烟: 喂一条 precheck 帧, 断言应答 ok——宿主进程本身能不能跑, 与浏览器无关地验证
+    $diag.Add('=== 宿主直启冒烟 (precheck 帧) ===')
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $hostExe
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $payload = [Text.Encoding]::UTF8.GetBytes('{"type":"precheck"}')
+    $lenBytes = [BitConverter]::GetBytes([UInt32]$payload.Length)
+    $proc.StandardInput.BaseStream.Write($lenBytes, 0, 4)
+    $proc.StandardInput.BaseStream.Write($payload, 0, $payload.Length)
+    $proc.StandardInput.BaseStream.Flush()
+    $proc.StandardInput.Close()
+    if (-not $proc.WaitForExit(15000)) { $proc.Kill($true); $diag.Add('冒烟超时 15s 强杀') }
+    $outBytes = New-Object byte[] 4
+    $n = $proc.StandardOutput.BaseStream.Read($outBytes, 0, 4)
+    if ($n -eq 4) {
+      $respLen = [BitConverter]::ToUInt32($outBytes, 0)
+      $respBuf = New-Object byte[] $respLen
+      $off = 0
+      while ($off -lt $respLen) { $r = $proc.StandardOutput.BaseStream.Read($respBuf, $off, $respLen - $off); if ($r -le 0) { break }; $off += $r }
+      $diag.Add("冒烟应答: " + [Text.Encoding]::UTF8.GetString($respBuf, 0, $off))
+    } else {
+      $diag.Add("冒烟无应答 (stdout 头 4 字节读到 $n); stderr: " + $proc.StandardError.ReadToEnd())
+    }
+  } catch { $diag.Add("冒烟异常: $($_.Exception.Message)") }
+} else {
+  $diag.Add('=== 六家登记键全部缺失或清单文件不在位, 冒烟跳过 ===')
+}
+$diag.Add('=== DataRoot\native_host 目录实况 ===')
+foreach ($d in @('D:\TaoDownData\TaoDown\native_host', "$env:LOCALAPPDATA\TaoDownData\TaoDown\native_host")) {
+  if (Test-Path $d) { $diag.Add("$d : " + ((Get-ChildItem $d -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')) }
+  else { $diag.Add("$d 不存在") }
+}
+# 浏览器侧第一手日志: 各家 chrome_debug.log 里扩展/native 相关行落盘
+$diag.Add('=== 浏览器侧 chrome_debug.log 摘录 (TaoDown/native/extension) ===')
+foreach ($b in @('edge','chrome','chromium','brave','vivaldi','yandex')) {
+  $dbg = Join-Path $PWD ("evidence\takeover-{0}-profile\chrome_debug.log" -f $b)
+  if (Test-Path $dbg) {
+    $diag.Add("--- $b ---")
+    Get-Content $dbg -ErrorAction SilentlyContinue | Where-Object { $_ -match 'TaoDown|taodown|native|Native|dchnmdakoleaofgpkhddhmohcoomlimp' -and $_ -notmatch 'NativeEvent|native_event' } | Select-Object -Last 40 | ForEach-Object { $diag.Add($_) }
+  } else { $diag.Add("--- $b : chrome_debug.log 不存在 ---") }
 }
 $diag | Set-Content evidence\takeover-diag.txt -Encoding UTF8
 
@@ -193,6 +262,7 @@ $srv.Stop(); Start-Sleep -Seconds 2
 try { $srcPs.Stop(); $srcRs.Close() } catch { }
 # 清理测试下载残留，不污染后续班次
 Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($failed.Count -gt 0) { throw ("下载接管实测不过（六家逐家口径）：{0}" -f ($failed -join '；')) }
 Write-Host '下载接管实测通过：六家浏览器逐家真触发下载、转交进收件箱、浏览器侧零成品文件'
