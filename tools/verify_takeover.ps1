@@ -126,15 +126,37 @@ function Get-BrowserExe($spec) {
 $failed = New-Object System.Collections.Generic.List[string]
 $report = [ordered]@{}
 
-# 企业策略显式放行 (run 45004083646 实锤): Chrome 稳定版 137+ 移除 --load-extension, 且 Google 品牌
-# 内核安装校验 (install_verifier ENFORCE) 把非商店外挂扩展一律 DISABLE_NOT_VERIFIED(256)——MustRemainDisabled
-# 对企业策略显式放行的 ID 直接放行 (AllowedByEnterprisePolicy), 故逐家写 ExtensionSettings 策略放行扩展 ID;
-# run 45007667463 实锤: "allowed" 只是不拦, 外部扩展仍装成待确认禁用态 (Chrome/Chromium=8192
-# DISABLE_EXTERNAL_EXTENSION, Yandex=1 USER_ACTION); Chromium 源码 external_install_manager.cc
-# OnExternalExtensionInstalled: installation_mode==kRecommended 走 AcknowledgeExternalExtension 自动确认;
-# run 45010535891 实锤: recommended_installed 确认了外部扩展 (8192 消失), 但 install_verifier.cc
-# MustRemainDisabled 只认 IsInstallationExplicitlyAllowed (kRecommended 不算), 非商店来源仍打 256
-# DISABLE_NOT_VERIFIED; 改 force_installed: 显式安装模式应同时满足确认路与校验豁免两路。
+# run 45014250527 实锤 + Chromium 137 源码 (install_verifier.cc) 钉死: 关3 (verify_mount.ps1) 写入的
+# HKCU 外部登记键在同一作业内持续生效, 关3.5 全新资料目录里扩展被装了两份——--load-extension 未打包
+# (location=LOAD) 与注册表外部安装 (location=EXTERNAL_*) 同 ID 合并, prefs 记录的外部安装实例受安装
+# 校验管辖: MustRemainDisabled 对未打包位置直接放行 (IsUnpackedLocation 提前 return false), 但外部
+# 位置走 !IsFromStore → verified=false; Google 品牌内核 (Chrome/Chrome-for-testing) 在 Windows 上
+# GetExperimentStatus()==ENFORCE → DISABLE_NOT_VERIFIED(256); Edge/Brave/Vivaldi 非 Google 品牌
+# (VerifyStatus::NONE) 不 enforce 故一直绿; Yandex 对外部安装打 DISABLE_USER_ACTION(1)。
+# force_installed 也救不了: AllowedByEnterprisePolicy 豁免路被 IsForceInstalledInLowTrustEnvironment
+# (非商店 update_url) 否掉, 仍落 256。修法: 关3.5 开跑前清掉六家外部登记键, 本班只测未打包加载的
+# 接管行为本身 (登记挂载路径由关3 单独覆盖), 未打包位置安装校验天然放行。
+$extRegRoots = @(
+  'HKCU:\Software\Google\Chrome\Extensions',
+  'HKCU:\Software\Chromium\Extensions',
+  'HKCU:\Software\Microsoft\Edge\Extensions',
+  'HKCU:\Software\BraveSoftware\Brave\Extensions',
+  'HKCU:\Software\BraveSoftware\Brave-Browser\Extensions',
+  'HKCU:\Software\Vivaldi\Extensions',
+  'HKCU:\Software\Yandex\YandexBrowser\Extensions',
+  'HKCU:\Software\YandexBrowser\Extensions'
+)
+foreach ($root in $extRegRoots) {
+  try {
+    if (Test-Path $root) {
+      Remove-Item (Join-Path $root $Id) -Recurse -Force -ErrorAction SilentlyContinue
+      Write-Host ("  清外部登记 {0}\{1}" -f $root, $Id)
+    }
+  } catch { Write-Host ("  外部登记清理失败 {0}: {1}" -f $root, $_.Exception.Message) }
+}
+# 企业策略显式放行 (run 45004083646 实锤): 逐家写 ExtensionSettings 策略放行扩展 ID, 兜住个别内核
+# 对未打包加载的额外拦截; run 45014250527 实锤 force_installed 对非商店来源无效 (低信任强制安装
+# 不享校验豁免), 回归 allowed——外部登记已清, allowed 不再触发 8192/256 外部安装禁用路。
 $policyRoots = [ordered]@{
   'Chrome'   = 'HKCU:\Software\Policies\Google\Chrome\ExtensionSettings'
   'Chromium' = 'HKCU:\Software\Policies\Chromium\ExtensionSettings'
@@ -146,7 +168,7 @@ $policyRoots = [ordered]@{
 foreach ($k in $policyRoots.Keys) {
   try {
     New-Item -ItemType Directory -Force -Path $policyRoots[$k] | Out-Null
-    Set-ItemProperty -Path $policyRoots[$k] -Name $Id -Value '{"installation_mode":"force_installed"}' -Type String
+    Set-ItemProperty -Path $policyRoots[$k] -Name $Id -Value '{"installation_mode":"allowed"}' -Type String
     Write-Host ("  企业策略放行 {0}: {1}" -f $k, $policyRoots[$k])
   } catch { Write-Host ("  策略写入失败 {0}: {1}" -f $k, $_.Exception.Message) }
 }
