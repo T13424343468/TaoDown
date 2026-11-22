@@ -129,7 +129,10 @@ $report = [ordered]@{}
 # 企业策略显式放行 (run 45004083646 实锤): Chrome 稳定版 137+ 移除 --load-extension, 且 Google 品牌
 # 内核安装校验 (install_verifier ENFORCE) 把非商店外挂扩展一律 DISABLE_NOT_VERIFIED(256)——MustRemainDisabled
 # 对企业策略显式放行的 ID 直接放行 (AllowedByEnterprisePolicy), 故逐家写 ExtensionSettings 策略放行扩展 ID;
-# Edge/Brave/Vivaldi 未打包加载路已通, 策略对其同样无害; Yandex 禁用原因为 USER_ACTION(1), 策略效果待证。
+# run 45007667463 实锤: "allowed" 只是不拦, 外部扩展仍装成待确认禁用态 (Chrome/Chromium=8192
+# DISABLE_EXTERNAL_EXTENSION, Yandex=1 USER_ACTION); Chromium 源码 external_install_manager.cc
+# OnExternalExtensionInstalled: installation_mode==kRecommended 走 AcknowledgeExternalExtension 自动确认,
+# 故改写 recommended_installed (推荐安装=自动确认), 对已通过三家无害。
 $policyRoots = [ordered]@{
   'Chrome'   = 'HKCU:\Software\Policies\Google\Chrome\ExtensionSettings'
   'Chromium' = 'HKCU:\Software\Policies\Chromium\ExtensionSettings'
@@ -141,7 +144,7 @@ $policyRoots = [ordered]@{
 foreach ($k in $policyRoots.Keys) {
   try {
     New-Item -ItemType Directory -Force -Path $policyRoots[$k] | Out-Null
-    Set-ItemProperty -Path $policyRoots[$k] -Name $Id -Value '{"installation_mode":"allowed"}' -Type String
+    Set-ItemProperty -Path $policyRoots[$k] -Name $Id -Value '{"installation_mode":"recommended_installed"}' -Type String
     Write-Host ("  企业策略放行 {0}: {1}" -f $k, $policyRoots[$k])
   } catch { Write-Host ("  策略写入失败 {0}: {1}" -f $k, $_.Exception.Message) }
 }
