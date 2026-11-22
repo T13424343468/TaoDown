@@ -18,6 +18,17 @@ echo ============================================
 dotnet publish src\TaoDown.App\TaoDown.App.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:Platform=x64 -o out\publish
 if errorlevel 1 ( echo [X] 发布失败，请把上面红字截给我。 & pause & exit /b 1 )
 echo ============================================
+echo [1.5/3] 发布浏览器接管宿主（关3.5 run 44988339377 实锤：App 发布不含 TaoDown.Host.exe，宿主登记不落地，接管全哑火）
+echo ============================================
+dotnet publish src\TaoDown.Host\TaoDown.Host.csproj -c Release -r win-x64 --self-contained false -o out\host-publish
+if errorlevel 1 ( echo [X] 宿主发布失败，请把上方完整报错一并发出 & pause & exit /b 1 )
+copy /y out\host-publish\TaoDown.Host.exe out\publish\ >nul
+copy /y out\host-publish\TaoDown.Host.dll out\publish\ >nul
+copy /y out\host-publish\TaoDown.Host.deps.json out\publish\ >nul
+copy /y out\host-publish\TaoDown.Host.runtimeconfig.json out\publish\ >nul
+if not exist out\publish\TaoDown.Host.exe ( echo [X] 宿主产物缺失 & pause & exit /b 1 )
+
+echo ============================================
 echo [2/3] 生成安装包 MSI
 echo ============================================
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\msi\package.ps1 -PublishDir "%~dp0out\publish" -OutDir "%~dp0out\msi"

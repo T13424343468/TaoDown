@@ -169,6 +169,24 @@ foreach ($spec in $Browsers) {
   }
 }
 
+# 失败取证 (run 44988339377 教训——六家全不接管却无宿主侧第一手证据, 归因断粮):
+# 宿主日志尾部 + NativeMessagingHosts 登记键实况落盘, 接管链断在哪一环当场可查
+$diag = New-Object System.Collections.Generic.List[string]
+foreach ($l in $HostLogs) {
+  if (Test-Path $l) {
+    $diag.Add("=== host.log: $l ===")
+    Get-Content $l -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add($_) }
+  } else { $diag.Add("=== host.log 不存在: $l ===") }
+}
+$diag.Add('=== NativeMessagingHosts 登记键实况 ===')
+foreach ($root in @('Software\Google\Chrome\NativeMessagingHosts','Software\Microsoft\Edge\NativeMessagingHosts','Software\Chromium\NativeMessagingHosts','Software\BraveSoftware\Brave\NativeMessagingHosts','Software\Vivaldi\NativeMessagingHosts','Software\Yandex\YandexBrowser\NativeMessagingHosts')) {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$root\$Id")
+  $val = if ($key) { $key.GetValue($null) } else { '<键缺失>' }
+  $manifestOk = ($val -and (Test-Path $val))
+  $diag.Add("$root\$Id = $val (清单文件存在=$manifestOk)")
+}
+$diag | Set-Content evidence\takeover-diag.txt -Encoding UTF8
+
 $report | ConvertTo-Json -Depth 5 | Set-Content evidence\takeover-report.json -Encoding UTF8
 # 清理下载源（先关监听再停 Runspace，防 GetContext 死锁——human_sim v2 同口径）
 $srv.Stop(); Start-Sleep -Seconds 2
