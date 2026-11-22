@@ -42,7 +42,8 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList '--quiet' -Wait -PassThru
           Write-Host "WinAppSDK 1.8 运行时安装器退出码: $($p.ExitCode)"
           # Main 主框架包真实身份 MicrosoftCorporationII.WinAppRuntime.Main.1.8 (安装器内嵌 MSIX Identity 实锤)
-          $main = Get-AppxPackage -Name 'MicrosoftCorporationII.WinAppRuntime.Main.1.8*','Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction SilentlyContinue
+          # -Name 只收单字符串不收数组 (run 44987974578 实锤参数绑定报错), 逐个查
+          $main = 'MicrosoftCorporationII.WinAppRuntime.Main.1.8*','Microsoft.WindowsAppRuntime.Main.1.8*' | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue }
           if (-not $main) {
             Write-Host "安装器 exit=$($p.ExitCode) 但 Main 包未见, WindowsApps 实况:"
             Get-ChildItem 'C:\Program Files\WindowsApps' -Directory -ErrorAction SilentlyContinue |
