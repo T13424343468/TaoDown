@@ -185,9 +185,16 @@ foreach ($spec in $Browsers) {
   # --load-extension: run 44999835778 取证实锤——注册表外挂 CRX 在新内核装成禁用态 (disable_reasons 256=DISABLE_NOT_VERIFIED,
   #   8192=DISABLE_EXTERNAL_EXTENSION, 六家全中), SW 从未运行接管无从谈起; 未打包加载必然启用, 本步实测的是接管行为本身,
   #   登记挂载路径由关3 单独覆盖。扩展目录与 verify_mount 手动加载路同源。
+  # run 45020273070 证据包定谳 (Secure Preferences 亲读): Chrome/Chromium/Yandex 的扩展 location=3 (EXTERNAL,
+  #   path=dchnmdakoleaofgpkhddhmohcoomlimp\1.2.11_0 即资料内 Extensions 目录, from_webstore=false) ——
+  #   --load-extension 在 Google 品牌 Chrome 137+ 被整个移除 (官方博客 2025-06 实锤, Chromium/Chrome for Testing 不受影响;
+  #   云端 Chromium choco 包实为 157.0.8103.79 Google 品牌内核, 同样吃掉该 flag), flag 被吞后扩展只剩注册表外部安装一路,
+  #   8192/1 禁用由此而来; Edge/Brave/Vivaldi location=8 (LOAD) 接管成立。修法: 启动参数加
+  #   --disable-features=DisableLoadExtensionCommandLineSwitch (Chromium 源码 feature 开关, 官方为 137+ 品牌版
+  #   保留的恢复路, Selenium 4.34 同款实测可行), 六家统一恢复未打包加载。
   $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
   Write-Host ("  扩展以未打包方式加载 (注册表外挂在新内核被禁用): " + $extDir)
-  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
+  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
   $mounted = Wait-ExtensionMounted $prof 45
   if (-not $mounted) {
     Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -214,10 +221,10 @@ foreach ($spec in $Browsers) {
 
   $inboxBefore = @(Test-InboxHit).Count
   # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
+  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
   Start-Sleep -Seconds 8
   Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--load-extension=`"$extDir`"", $Url
+  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", $Url
   $taken = $null
   for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 2
