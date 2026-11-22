@@ -391,17 +391,24 @@ $wxs = @"
          InstallFinalize 落盘脚本执行前跑, EnsureRuntime.ps1 还没装到盘上, powershell
          -File 找不到文件秒退 (TaoZip run 44877397577 实锤); deferred 排在 InstallFiles
          后即落盘后执行。64 位 PowerShell (System64Folder): 32 位 PS 下注册表被重定向
-         漏检 (TaoZip run 44875970874 实锤)。cmd 包一层把 PS 报错重定向落盘拿第一手输出。 -->
+         漏检 (TaoZip run 44875970874 实锤)。
+         下载不弹命令窗 (全系安装器标准, TaoPad v1.1.3 同款): CA 改 WixQuietExec64
+         (WixToolset.Util 扩展, 随包内置 tools/msi/wix/ext), 直接起 PowerShell 不再经
+         cmd 包一层——旧写法 cmd 窗口在安装期可见。输出落盘改由 PowerShell 内联完成:
+         先建日志目录, 脚本输出 *>> 重定向到 ca-out.txt, 脚本自身另有 runtime log 双通道。 -->
     <!-- 云测钩子属性: 断言二强制走下载路。环境变量传不进 msiexec 服务上下文
-         (TaoZip run 44885229031 实锤), 改走 MSI 公共属性: msiexec /i xxx.msi TAODOWNFORCE=1 -->
+         (TaoZip run 44885229031 实锤), 改走 MSI 公共属性: msiexec /i xxx.msi TAODOWNFORCE=1;
+         以 -ForceDownload 参数直传脚本 (cmd set 环境变量随 cmd 消失, 参数直达) -->
     <Property Id="TAODOWNFORCE" Secure="yes" />
     <!-- 版面铁律 (TaoPad run 44901597525 实锤 1721): SetProperty 必须写在 InstallExecuteSequence
          之前——同挂 After="InstallFiles" 的动作按源码顺序编号, 反过来写会让 EnsureRuntimes
-         先于 RTENSURECMD 求值, 起跑时属性还是空的, cmd 没起来直接 1721→1603 -->
-    <SetProperty Id="RTENSURECMD" After="InstallFiles" Sequence="execute"
-                 Value="[System64Folder]cmd.exe" />
-    <CustomAction Id="EnsureRuntimes" Property="RTENSURECMD" Execute="deferred" Return="check" Impersonate="no"
-                  ExeCommand="/c mkdir &quot;[CommonAppDataFolder]TaoDown&quot; 2&gt;nul &amp; set &quot;TAODOWN_FORCE_RUNTIME_DOWNLOAD=[TAODOWNFORCE]&quot; &amp; &quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]EnsureRuntime.ps1&quot; &gt;&gt; &quot;[CommonAppDataFolder]TaoDown\ca-out.txt&quot; 2&gt;&amp;1" />
+         先于其命令行属性求值, 起跑时属性还是空的直接 1721→1603。
+         WixQuietExec64 约定: 与 CA 同名的属性承载完整命令行, 引号内引号用 &quot; 转义,
+         PS 字符串用单引号避免冲突 -->
+    <SetProperty Id="EnsureRuntimes" After="InstallFiles" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;New-Item -ItemType Directory -Force -Path '[CommonAppDataFolder]TaoDown' | Out-Null; &amp; '[INSTALLFOLDER]EnsureRuntime.ps1' -ForceDownload '[TAODOWNFORCE]' *>> '[CommonAppDataFolder]TaoDown\ca-out.txt'&quot;" />
+    <CustomAction Id="EnsureRuntimes" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="deferred" Return="check" Impersonate="no" />
     <InstallExecuteSequence>
 
       <Custom Action="SetKillCmd" After="InstallValidate" />
@@ -1192,7 +1199,7 @@ Write-Host ("打包工具: " + (Get-Item $wixExe).Length + " bytes @ " + (Get-It
 
 
 
-& $wixExe build $wxsPath -pdbtype none -o $msi 2>&1 | Tee-Object -FilePath (Join-Path $env:TEMP "TaoDown.msi-build.log")
+& $wixExe build $wxsPath -pdbtype none -o $msi -ext (Join-Path $PSScriptRoot "wix\ext\WixToolset.Util.wixext.dll") 2>&1 | Tee-Object -FilePath (Join-Path $env:TEMP "TaoDown.msi-build.log")
 
 
 
