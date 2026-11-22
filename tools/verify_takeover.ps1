@@ -136,15 +136,30 @@ $report = [ordered]@{}
 # force_installed 也救不了: AllowedByEnterprisePolicy 豁免路被 IsForceInstalledInLowTrustEnvironment
 # (非商店 update_url) 否掉, 仍落 256。修法: 关3.5 开跑前清掉六家外部登记键, 本班只测未打包加载的
 # 接管行为本身 (登记挂载路径由关3 单独覆盖), 未打包位置安装校验天然放行。
+# run 45029338370 再实锤 (Secure Preferences 亲读): 上轮只清 HKCU 且没停应用——应用常驻且每 30s
+# 刷新接管注册表 (NativeHostRegistrar.WriteLocalExtensionEntries HKCU+HKLM 双写, startup.log
+# 「接管注册表已刷新 插件外链=17」), 清完 28s 内被回写, Chrome 启动时外部登记在位 → 仍 location=3
+# + 8192。修法: 先停主程序再清 HKCU+HKLM 双蜂巢 (收件箱由宿主独立落盘, TaoDown.Host 只写 inbox
+# 不依赖主程序, 接管判定不受影响; 关4 bigfile_regression 自行拉起应用)。
+Get-Process 'TaoDown' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 $extRegRoots = @(
   'HKCU:\Software\Google\Chrome\Extensions',
+  'HKLM:\Software\Google\Chrome\Extensions',
   'HKCU:\Software\Chromium\Extensions',
+  'HKLM:\Software\Chromium\Extensions',
   'HKCU:\Software\Microsoft\Edge\Extensions',
+  'HKLM:\Software\Microsoft\Edge\Extensions',
   'HKCU:\Software\BraveSoftware\Brave\Extensions',
+  'HKLM:\Software\BraveSoftware\Brave\Extensions',
   'HKCU:\Software\BraveSoftware\Brave-Browser\Extensions',
+  'HKLM:\Software\BraveSoftware\Brave-Browser\Extensions',
   'HKCU:\Software\Vivaldi\Extensions',
+  'HKLM:\Software\Vivaldi\Extensions',
   'HKCU:\Software\Yandex\YandexBrowser\Extensions',
-  'HKCU:\Software\YandexBrowser\Extensions'
+  'HKLM:\Software\Yandex\YandexBrowser\Extensions',
+  'HKCU:\Software\YandexBrowser\Extensions',
+  'HKLM:\Software\YandexBrowser\Extensions'
 )
 foreach ($root in $extRegRoots) {
   try {
@@ -194,6 +209,10 @@ foreach ($spec in $Browsers) {
   #   保留的恢复路, Selenium 4.34 同款实测可行), 六家统一恢复未打包加载。
   $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
   Write-Host ("  扩展以未打包方式加载 (注册表外挂在新内核被禁用): " + $extDir)
+  # 逐家开跑前再清一遍登记键（run 45029338370 教训：任何残留登记都会把实例并回外部安装路）
+  foreach ($root in $extRegRoots) {
+    try { if (Test-Path $root) { Remove-Item (Join-Path $root $Id) -Recurse -Force -ErrorAction SilentlyContinue } } catch { }
+  }
   Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
   $mounted = Wait-ExtensionMounted $prof 45
   if (-not $mounted) {
