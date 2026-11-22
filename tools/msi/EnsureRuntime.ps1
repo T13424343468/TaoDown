@@ -100,27 +100,35 @@ if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-DesktopRuntime10)) {
 #   它内部走 AppX 部署服务装 MSIX 并 provisioning 给全体用户, 不走 MSI 链, 与本产品 MSI
 #   事务无 _MSIExecute 互斥 (dotnet-install 同理); 装后以实测为准, 不信安装器退出码。
 function Test-WinAppRuntime {
+    # 1.8 Main 包真实身份是 MicrosoftCorporationII.WinAppRuntime.Main.1.8 (官方安装器内嵌 MSIX Identity 实锤),
+    # 旧探针 Microsoft.WindowsAppRuntime.Main.1.8* 名字对不上必然全盲 (run 44981919092 verify-inconclusive 实锤),
+    # 两个名字都查, 旧名保留做兼容
+    $mainPatterns = @('MicrosoftCorporationII.WinAppRuntime.Main.1.8*', 'Microsoft.WindowsAppRuntime.Main.1.8*')
     try {
         # -AllUsers: msiexec 以 SYSTEM 执行, 普通查询只看 SYSTEM 用户包, provisioned 包会漏检
         # run 44908603086 实锤: 通配 1.8* 会命中 Framework/Delta 等零碎包, 缺 Main 包时误判在位,
         # 应用启动仍弹 'Windows App Runtime 1.8 missing'; 应用依赖的是 Main 主框架包, 检测必须查 Main
-        $hit = Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction Stop
-        if ($hit) { return $true }
+        foreach ($pat in $mainPatterns) {
+            if (Get-AppxPackage -AllUsers -Name $pat -ErrorAction Stop) { return $true }
+        }
     } catch {
         # 32 位 PowerShell 加载 Appx 模块失败是已知形态 (TaoPad run 44921060474 实锤此路在 CA 上下文不可靠),
         # 落日志后走目录探针, 不当失败处理
         Write-RtLog ("appx-allusers-query-failed " + $_.Exception.Message)
     }
     # 回落: 当前用户视角再查一次 (-AllUsers 在个别 SYSTEM 上下文可能抛错)
-    try {
-        if (Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction Stop) { return $true }
-    } catch { }
-    try {
-        if (Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.Main.1.8_*' -Directory -ErrorAction SilentlyContinue) { return $true }
-    } catch { }
+    foreach ($pat in $mainPatterns) {
+        try {
+            if (Get-AppxPackage -Name $pat -ErrorAction Stop) { return $true }
+        } catch { }
+        try {
+            if (Get-ChildItem (Join-Path 'C:\Program Files\WindowsApps' ($pat -replace '\*$', '_*')) -Directory -ErrorAction SilentlyContinue) { return $true }
+        } catch { }
+    }
     # 更高版本 Main 在位也算数: 框架依赖应用按最低版本绑定, 机器已有 1.9+ Main 时 1.8 最低要求直接满足
     # (TaoPad run 44921060474 实锤: 云台镜像自带更高版 Main, 1.8 安装器「已有更新版」3 秒 exit=0 秒退, Main.1.8 永远不会出现)
     try {
+        if (Get-ChildItem 'C:\Program Files\WindowsApps\MicrosoftCorporationII.WinAppRuntime.Main.1.*_*' -Directory -ErrorAction SilentlyContinue) { Write-RtLog 'main-newer-present'; return $true }
         if (Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.Main.1.*_*' -Directory -ErrorAction SilentlyContinue) { Write-RtLog 'main-newer-present'; return $true }
     } catch { }
     return $false
@@ -128,7 +136,7 @@ function Test-WinAppRuntime {
 # 诊断落盘: 把 WindowsApps 下 Main/1.8 相关目录实况写进日志, 下班对账有据可查
 try {
     Get-ChildItem 'C:\Program Files\WindowsApps' -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like 'Microsoft.WindowsAppRuntime*' } |
+        Where-Object { $_.Name -like '*WinAppRuntime*' } |
         ForEach-Object { Write-RtLog ("diag-appx-dir " + $_.Name) }
 } catch { }
 if ($env:TAODOWN_FORCE_RUNTIME_DOWNLOAD -ne '1' -and (Test-WinAppRuntime)) {

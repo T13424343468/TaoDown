@@ -33,6 +33,24 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 安装界面框架运行时（框架依赖发布需 WinAppSDK 1.8, 云台只有 2.6——run 44981919092 实锤 CA 在 SYSTEM 上下文装不上, 应用起不来）
+        # TaoPad 已验证模式: runner 用户上下文跑官方安装器; 不信退出码, 装后实测 Main 主框架包在位才算过
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:TEMP 'windowsappruntimeinstall-x64.exe'
+          Invoke-WebRequest -Uri 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe' -OutFile $exe
+          $p = Start-Process -FilePath $exe -ArgumentList '--quiet' -Wait -PassThru
+          Write-Host "WinAppSDK 1.8 运行时安装器退出码: $($p.ExitCode)"
+          # Main 主框架包真实身份 MicrosoftCorporationII.WinAppRuntime.Main.1.8 (安装器内嵌 MSIX Identity 实锤)
+          $main = Get-AppxPackage -Name 'MicrosoftCorporationII.WinAppRuntime.Main.1.8*','Microsoft.WindowsAppRuntime.Main.1.8*' -ErrorAction SilentlyContinue
+          if (-not $main) {
+            Write-Host "安装器 exit=$($p.ExitCode) 但 Main 包未见, WindowsApps 实况:"
+            Get-ChildItem 'C:\Program Files\WindowsApps' -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like '*WinAppRuntime*' } | ForEach-Object { Write-Host "  $($_.Name)" }
+            throw "WinAppSDK 1.8 运行时安装后 Main 主框架包不在位 (安装器 exit=$($p.ExitCode))"
+          }
+          Write-Host "Main 包在位: $($main.Name) $($main.Version)"
+
       - name: 安装 .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
