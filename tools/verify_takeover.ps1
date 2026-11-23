@@ -89,6 +89,78 @@ function Test-InboxHit {
   return $null
 }
 
+# ---- CDP 模拟用户启用（Chrome 系外部扩展的一次性确认, run 45116390905 口径）----
+# Google 品牌 Chrome 137+ 无视 --load-extension (chrome_debug.log 原话: "--load-extension is not
+# allowed in Google Chrome, ignoring", 恢复开关 DisableLoadExtensionCommandLineSwitch 在 157 实测无效),
+# 扩展只能走注册表外部安装一路, 装上即待用户确认 (disable_reasons=8192)。真实用户在
+# chrome://extensions 开一次开关即启用——该开关的实现就是 chrome.management.setEnabled
+# (chromium chrome/browser/resources/extensions/service.ts setItemEnabled)。这里用 CDP 在
+# chrome://extensions 页面上下文里调同一 API 模拟用户操作, 不静默跳过: 失败即报红。
+$CdpPort = 9223
+function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
+  $tgt = $null
+  foreach ($m in @('PUT', 'GET')) {
+    try { $tgt = Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$Port/json/new?chrome://extensions/" -TimeoutSec 10; break } catch { }
+  }
+  if (-not $tgt -or -not $tgt.webSocketDebuggerUrl) { throw 'CDP 打开 chrome://extensions 失败' }
+  $ws = [System.Net.WebSockets.ClientWebSocket]::new()
+  $ws.ConnectAsync([Uri]$tgt.webSocketDebuggerUrl, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+  try {
+    $buf = New-Object byte[] (1MB)
+    $send = {
+      param($obj)
+      $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Depth 6 -Compress))
+      $ws.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    }
+    $recv = {
+      param($wantId)
+      $deadline = [DateTime]::UtcNow.AddSeconds(30)
+      while ([DateTime]::UtcNow -lt $deadline) {
+        $ms = [System.IO.MemoryStream]::new()
+        while ($true) {
+          $seg = [ArraySegment[byte]]::new($buf)
+          $r = $ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+          if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { throw 'CDP 连接被对端关闭' }
+          $ms.Write($buf, 0, $r.Count)
+          if ($r.EndOfMessage) { break }
+        }
+        $msg = [Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
+        if ($msg.id -ne $wantId) { continue }  # 事件帧跳过, 只认命令回包
+        return $msg
+      }
+      return $null
+    }
+    # 等页面就绪（WebUI 绑定加载完才有 chrome.management）
+    $ready = $false
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep -Milliseconds 800
+      & $send @{ id = 1; method = 'Runtime.evaluate'; params = @{ expression = "typeof chrome !== 'undefined' && typeof chrome.management !== 'undefined'"; returnByValue = $true } }
+      $resp = & $recv 1
+      if ($resp -and $resp.result -and $resp.result.result -and $resp.result.result.value -eq $true) { $ready = $true; break }
+    }
+    if (-not $ready) { throw 'chrome.management 在 chrome://extensions 页面不可用' }
+    & $send @{ id = 2; method = 'Runtime.evaluate'; params = @{ expression = "chrome.management.setEnabled('$ExtId', true)"; awaitPromise = $true; returnByValue = $true } }
+    $resp2 = & $recv 2
+    if (-not $resp2) { throw 'CDP setEnabled 无回包' }
+    if ($resp2.error) { throw ("CDP setEnabled 失败: " + ($resp2.error | ConvertTo-Json -Compress)) }
+    if ($resp2.result.exceptionDetails) { throw ("CDP setEnabled 异常: " + ($resp2.result.exceptionDetails | ConvertTo-Json -Compress)) }
+  } finally { $ws.Dispose() }
+}
+
+# 读资料目录里扩展的 disable_reasons（挂载≠启用, 非空即待处理）
+function Get-DisableReasons([string]$ProfileDir, [string]$ExtId) {
+  foreach ($file in @('Secure Preferences', 'Preferences')) {
+    $pf = Join-Path $ProfileDir "Default\$file"
+    if (-not (Test-Path $pf)) { continue }
+    try {
+      $j = Get-Content $pf -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $es = $j.extensions.settings
+      if ($es -and ($es.PSObject.Properties.Name -contains $ExtId)) { return $es.$ExtId.disable_reasons }
+    } catch { continue }
+  }
+  return $null
+}
+
 function Test-HostLogHit {
   foreach ($l in $HostLogs) {
     if (-not (Test-Path $l)) { continue }
@@ -144,10 +216,34 @@ $report = [ordered]@{}
 # run 45033054105 实锤: Get-Process 'TaoDown' 杀不中主程序 (应用宿主进程名不叫 TaoDown, 可执行文件
 # Path 才含 TaoDown), 清键后 28s 被每 30s 刷新的接管注册表回写, Chrome 启动时外部登记在位 → 仍
 # location=3+8192。改为按可执行文件 Path 多路匹配强杀, 杀完断言进程清零。
+# run 45116390905 证据包定谳 (Secure Preferences 亲读 + chrome_debug.log 原话):
+#   ① 清键断言全过、主程序杀净, Chrome/Chromium/Yandex 的扩展仍 location=3 (EXTERNAL_REGISTRY,
+#      path=资料内 Extensions\dchnmda...\1.2.11_0, from_webstore=false) —— 漏网之源是 MSI 装机写的
+#      32 位视图登记键 (tools/extension/registry_paths.json wow_paths_64bit_windows:
+#      Software\Wow6432Node\Google\Chrome\Extensions + Wow6432Node\Microsoft\Edge\Extensions),
+#      上轮清理只清 64 位视图, WOW 键在位 → Chrome 启动时从 WOW 键装 CRX。修法: 清理清单补两个 WOW 键。
+#   ② Chrome 157 日志原话 "--load-extension is not allowed in Google Chrome, ignoring" ——
+#      --disable-features=DisableLoadExtensionCommandLineSwitch 恢复路在品牌版 157 实测无效,
+#      Google 品牌 Chrome/Chromium (choco 包实为品牌内核) 的扩展只剩注册表外部安装一路。
+#   ③ 真实用户口径: 装机后 Chrome 系扩展经注册表外部安装进资料目录、装上即待用户确认
+#      (disable_reasons 8192=DISABLE_EXTERNAL_EXTENSION, Yandex 1), 用户在 chrome://extensions
+#      开一次开关即启用——开关实现就是 chrome.management.setEnabled (chromium
+#      chrome/browser/resources/extensions/service.ts setItemEnabled)。本步对 Chrome/Chromium/Yandex
+#      重写登记键模拟装机状态, 用 CDP 在 chrome://extensions 页面调同一 API 模拟用户开关,
+#      断言启用态落盘后再实测接管——不静默跳过, 启用失败即报红。Edge/Brave/Vivaldi 非 Google 品牌
+#      仍走 --load-extension 未打包加载 (location=8), 口径不变。
 Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 $leftApp = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') })
 if ($leftApp.Count -gt 0) { throw ("主程序未杀净: " + (($leftApp | ForEach-Object { "$($_.Id):$($_.Path)" }) -join '; ')) }
+# 清键前先抄下装机登记的 CRX 路径（关3 由应用写入, 与 MSI 装机登记同值）——
+# Chrome/Chromium/Yandex 走真实用户路径时要用它重写登记键
+$CrxPath = $null
+foreach ($probe in @('HKCU:\Software\Google\Chrome\Extensions', 'HKLM:\Software\Google\Chrome\Extensions')) {
+  $k = Get-Item (Join-Path $probe $Id) -ErrorAction SilentlyContinue
+  if ($k) { $p = $k.GetValue('path'); if ($p -and (Test-Path $p)) { $CrxPath = $p; break } }
+}
+if ($CrxPath) { Write-Host ("  装机登记 CRX 路径: {0}" -f $CrxPath) }
 $extRegRoots = @(
   'HKCU:\Software\Google\Chrome\Extensions',
   'HKLM:\Software\Google\Chrome\Extensions',
@@ -164,7 +260,12 @@ $extRegRoots = @(
   'HKCU:\Software\Yandex\YandexBrowser\Extensions',
   'HKLM:\Software\Yandex\YandexBrowser\Extensions',
   'HKCU:\Software\YandexBrowser\Extensions',
-  'HKLM:\Software\YandexBrowser\Extensions'
+  'HKLM:\Software\YandexBrowser\Extensions',
+  # run 45116390905 实锤: MSI 装机还写了 32 位视图登记键 (tools/extension/registry_paths.json
+  # wow_paths_64bit_windows), 上轮清理只清 64 位视图, Wow6432Node 键漏网——Chrome/Chromium/Yandex
+  # 启动时从 WOW 键把 CRX 装成外部安装 (location=3), Google 品牌内核强制校验打 8192, Yandex 打 1。
+  'HKLM:\Software\Wow6432Node\Google\Chrome\Extensions',
+  'HKLM:\Software\Wow6432Node\Microsoft\Edge\Extensions'
 )
 foreach ($root in $extRegRoots) {
   try {
@@ -203,22 +304,21 @@ foreach ($spec in $Browsers) {
   $exe = Get-BrowserExe $spec
   if (-not $exe) { $failed.Add("$($spec.Name)：浏览器不在位，未覆盖"); continue }
 
+  # Chrome/Chromium/Yandex 走真实用户路径 (run 45116390905 口径): Google 品牌 Chrome 137+ 无视
+  # --load-extension (chrome_debug.log 原话 "--load-extension is not allowed in Google Chrome,
+  # ignoring"), 恢复开关在 157 实测无效; 真实装机后扩展经注册表外部安装进资料目录、装上即待用户
+  # 确认 (8192/1), 用户在 chrome://extensions 开一次开关即启用。本步重写登记键模拟装机状态,
+  # 再用 CDP 模拟用户开关, 然后实测接管——不静默跳过, 启用失败即报红。
+  $NeedsUserEnable = @('Chrome', 'Chromium', 'Yandex') -contains $spec.Name
+
   # 每家独立资料目录：扩展按登记自动挂载（与 verify_mount 同机制）
   $prof = Join-Path $PWD ("evidence\takeover-{0}-profile" -f $spec.Name.ToLower())
   Remove-Item $prof -Recurse -Force -ErrorAction SilentlyContinue
   # --enable-logging: SW 控制台与 native messaging 报错落 chrome_debug.log (run 44991534420 六家全不接管却无浏览器侧第一手日志, 归因断粮)
-  # --load-extension: run 44999835778 取证实锤——注册表外挂 CRX 在新内核装成禁用态 (disable_reasons 256=DISABLE_NOT_VERIFIED,
-  #   8192=DISABLE_EXTERNAL_EXTENSION, 六家全中), SW 从未运行接管无从谈起; 未打包加载必然启用, 本步实测的是接管行为本身,
-  #   登记挂载路径由关3 单独覆盖。扩展目录与 verify_mount 手动加载路同源。
-  # run 45020273070 证据包定谳 (Secure Preferences 亲读): Chrome/Chromium/Yandex 的扩展 location=3 (EXTERNAL,
-  #   path=dchnmdakoleaofgpkhddhmohcoomlimp\1.2.11_0 即资料内 Extensions 目录, from_webstore=false) ——
-  #   --load-extension 在 Google 品牌 Chrome 137+ 被整个移除 (官方博客 2025-06 实锤, Chromium/Chrome for Testing 不受影响;
-  #   云端 Chromium choco 包实为 157.0.8103.79 Google 品牌内核, 同样吃掉该 flag), flag 被吞后扩展只剩注册表外部安装一路,
-  #   8192/1 禁用由此而来; Edge/Brave/Vivaldi location=8 (LOAD) 接管成立。修法: 启动参数加
-  #   --disable-features=DisableLoadExtensionCommandLineSwitch (Chromium 源码 feature 开关, 官方为 137+ 品牌版
-  #   保留的恢复路, Selenium 4.34 同款实测可行), 六家统一恢复未打包加载。
+  # --load-extension: Edge/Brave/Vivaldi 非 Google 品牌仍走未打包加载 (location=8), 接管行为照测;
+  #   Chrome/Chromium/Yandex 该 flag 被品牌版无视, 扩展走登记键外部安装 (见上)。
   $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
-  Write-Host ("  扩展以未打包方式加载 (注册表外挂在新内核被禁用): " + $extDir)
+  Write-Host ("  扩展加载方式: " + $(if ($NeedsUserEnable) { "注册表外部安装 (模拟真实装机, 用户一次启用后接管)" } else { "未打包加载" }) + " — 扩展目录: " + $extDir)
   # 逐家开跑前再停主程序、再清一遍登记键并断言（run 45029338370/45033054105 教训：主程序存活时
   # 每 30s 周期回写登记键，任何残留都会把实例并回外部安装路）
   Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like '*TaoDown*') } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -230,7 +330,29 @@ foreach ($spec in $Browsers) {
       }
     } catch { $failed.Add("$($spec.Name)：开跑前外部登记清不干净 $root") }
   }
-  Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank"
+  if ($NeedsUserEnable) {
+    # 重写登记键 = 真实装机状态 (应用每 30s 刷新 + MSI 装机登记, HKCU/HKLM/32 位视图同值)
+    if (-not $CrxPath) { $failed.Add("$($spec.Name)：装机登记 CRX 路径未取得，无法模拟装机登记"); continue }
+    $extVersion = (Get-Content (Join-Path $extDir 'manifest.json') -Raw | ConvertFrom-Json).version
+    foreach ($root in @(
+        'HKCU:\Software\Google\Chrome\Extensions', 'HKLM:\Software\Google\Chrome\Extensions',
+        'HKLM:\Software\Wow6432Node\Google\Chrome\Extensions',
+        'HKCU:\Software\Chromium\Extensions', 'HKLM:\Software\Chromium\Extensions',
+        'HKCU:\Software\Yandex\YandexBrowser\Extensions', 'HKLM:\Software\Yandex\YandexBrowser\Extensions',
+        'HKCU:\Software\YandexBrowser\Extensions', 'HKLM:\Software\YandexBrowser\Extensions')) {
+      try {
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        $k = Get-Item (Join-Path $root $Id) -ErrorAction SilentlyContinue
+        if (-not $k) { $k = New-Item (Join-Path $root $Id) -Force }
+        $k.SetValue('path', $CrxPath)
+        $k.SetValue('version', $extVersion)
+      } catch { $failed.Add("$($spec.Name)：登记键重写失败 $root : $($_.Exception.Message)") }
+    }
+    Write-Host ("  已重写登记键 (模拟装机): path={0} version={1}" -f $CrxPath, $extVersion)
+  }
+  $launchArgs = @("--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "--user-data-dir=`"$prof`"", "about:blank")
+  if ($NeedsUserEnable) { $launchArgs = @("--no-first-run", "--no-default-browser-check", "--enable-logging", "--v=1", "--remote-debugging-port=$CdpPort", "--user-data-dir=`"$prof`"", "about:blank") }
+  Start-Process $exe -ArgumentList $launchArgs
   $mounted = Wait-ExtensionMounted $prof 45
   if (-not $mounted) {
     Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -238,15 +360,23 @@ foreach ($spec in $Browsers) {
     continue
   }
   # 启用态取证 (run 44999835778 教训): 挂载≠启用, disable_reasons 非空即当场报红
-  $dr = $null
-  foreach ($file in @('Secure Preferences', 'Preferences')) {
-    $pf2 = Join-Path $prof "Default\$file"
-    if (-not (Test-Path $pf2)) { continue }
+  $dr = Get-DisableReasons $prof $Id
+  if ($dr -and @($dr).Count -gt 0 -and $NeedsUserEnable) {
+    # 真实用户路径: 模拟用户在 chrome://extensions 开一次开关 (CDP 调 chrome.management.setEnabled,
+    # 与页面开关同一实现), 再断言启用态落盘
+    Write-Host ("  {0} 扩展待用户确认 (disable_reasons={1})，模拟用户启用…" -f $spec.Name, ($dr -join ','))
     try {
-      $j = Get-Content $pf2 -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-      $es = $j.extensions.settings
-      if ($es -and ($es.PSObject.Properties.Name -contains $Id)) { $dr = $es.$Id.disable_reasons; break }
-    } catch { continue }
+      Enable-ExtensionAsUser $CdpPort $Id
+      for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 2
+        $dr2 = Get-DisableReasons $prof $Id
+        if (-not $dr2 -or @($dr2).Count -eq 0) { $dr = $dr2; break }
+        $dr = $dr2
+      }
+      Write-Host ("  模拟用户启用后 disable_reasons={0}" -f ($(if ($dr) { $dr -join ',' } else { '(空)' })))
+    } catch {
+      Write-Host ("  模拟用户启用失败: {0}" -f $_.Exception.Message)
+    }
   }
   if ($dr -and @($dr).Count -gt 0) {
     Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

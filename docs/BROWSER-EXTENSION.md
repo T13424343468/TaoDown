@@ -10,6 +10,10 @@
 
 覆盖的登记位置：Chrome、Edge、Chromium、Brave（两键）、Vivaldi、Opera、Yandex（两键）、夸克（三键）、360 安全/极速（各两键）。64 位 Windows 额外写 Chrome/Edge 的 Wow6432Node 键。键组唯一来源 `tools/extension/registry_paths.json`，安装包、主程序、单元测试三方交叉校验一致。
 
+### Chrome / Chromium / Yandex 首次需手动启用（一次）
+
+Google 品牌 Chrome 137 起移除了命令行加载扩展的路（`--load-extension` 被品牌版整个无视），且对注册表外部安装强制「待用户确认」：装好 TaoDown 后重启 Chrome，扩展会出现在扩展页里但处于**待确认禁用态**——这是 Chrome 的安全设计，不是故障。**在 `chrome://extensions` 里把「TaoDown 接管助手」的开关打开一次**（或点浏览器弹出的确认提示），之后接管长期生效，升级、重启都不再需要操作。Chromium（Google 品牌内核）与 Yandex 同此口径；Edge / Brave / Vivaldi 无此步骤，挂载即启用。
+
 ### 升级说明（v2.50 起换新签名钥匙）
 
 插件签名私钥未存档被迫换新，扩展 ID 从旧 `mhb…` 变为新 `dchnmdakoleaofgpkhddhmohcoomlimp`。升级后：
