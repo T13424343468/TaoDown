@@ -113,6 +113,7 @@ internal static class Program
                     if (BrowserRequest.TryParse(json, out var request, out var error) && request is not null)
                     {
                         var path = SaveToInbox(request);
+                        EnsureAppRunning();
                         Reply(stdout, ok: true, Path.GetFileName(path));
                     }
                     else
@@ -226,6 +227,7 @@ internal static class Program
         });
         var inboxPath = Path.Combine(InboxDir, $"{DateTime.Now:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}.json");
         File.WriteAllText(inboxPath, envelope);
+        EnsureAppRunning();
         Reply(stdout, ok: true, safeName);
     }
 
@@ -274,6 +276,33 @@ internal static class Program
         return final;
     }
 
+
+    /// <summary>主程序未运行时自动拉起（v2.56：接管请求不落地等开——点下载即见软件）。
+    /// 单实例互斥体兜底并发拉起；拉起失败只记日志，收件箱照常落盘不丢请求。</summary>
+    private static void EnsureAppRunning()
+    {
+        try
+        {
+            if (System.Diagnostics.Process.GetProcessesByName("TaoDown").Length > 0)
+            {
+                return;
+            }
+
+            var exe = Path.Combine(AppContext.BaseDirectory, "TaoDown.exe");
+            if (!File.Exists(exe))
+            {
+                HostLog.Write($"主程序不在位，无法自动拉起：{exe}");
+                return;
+            }
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+            HostLog.Write("主程序未运行，已自动拉起（收件箱请求待其受理）");
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("自动拉起主程序失败：" + ex.Message);
+        }
+    }
     private static void Reply(Stream stdout, bool ok, string detail)
     {
         // v2.54：应答写失败（浏览器侧管道已断）不再让宿主崩溃

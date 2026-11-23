@@ -7,8 +7,14 @@
 # 云测钩子: -ForceDownload 1 强制三项全走下载路 (断言二用), 日常安装不传即走检测路。
 #   该参数由 WiX 自定义动作从 MSI 公共属性 TAODOWNFORCE 直传 (CA 改 WixQuietExec64 后
 #   不再经 cmd, cmd set 环境变量随之消失, 参数直达脚本)。
-param([string]$ForceDownload)
+# 分段进度 (2.4.3): MSI 侧把单个运行时 CA 拆成三个顺序 CA (EnsureRtDotNet → EnsureRtWinApp
+#   → EnsureRtVc), 各传 -RtPhase 只跑对应一段; 每段结束 MSI 进度条各推进一步, 用户能看到
+#   安装在动 (老板 2.4.2 真机实锤: 单 CA 下载段进度条长时间不动像卡死)。不传 -RtPhase 时
+#   三段连跑, 行为与旧版完全一致 (本地直调/云测兼容)。日志行全保持原样, 云测断言不受影响。
+param([string]$ForceDownload, [string]$RtPhase)
 $ErrorActionPreference = 'Stop'
+# 分段开关: 不传 -RtPhase 视为整跑 (三段连跑, 旧口径); 传了只跑对应一段
+$phaseAll = [string]::IsNullOrEmpty($RtPhase)
 # 日志落机器级固定路径: 本脚本由 WiX 自定义动作在 per-machine msiexec (SYSTEM) 上下文执行,
 #   $env:TEMP 指向 C:\Windows\Temp, 云测断言按 runner 用户 TEMP 查不到 (run 44870126512 实锤);
 #   ProgramData 下产品目录全用户可读, SYSTEM/用户均可写
@@ -49,7 +55,8 @@ function Show-NoNetwork([string]$what, [int]$mb) {
     } catch { }
 }
 
-# ---- 1) .NET 10 桌面运行时 ----
+# ---- 1) .NET 10 桌面运行时 (分段 1/3, CA: EnsureRtDotNet) ----
+if ($phaseAll -or $RtPhase -eq 'DotNet') {
 function Test-DesktopRuntime10 {
     # 以系统实际注册为准: 统一目录 shared 下有 10.x 桌面运行时, 或注册表 InstalledVersions 有 10.x 键。
     # 注意: 本脚本由 WiX 自定义动作以 32 位 PowerShell 执行 (SysWOW64), $env:ProgramFiles 会指到
@@ -93,8 +100,9 @@ if ($ForceDownload -ne '1' -and (Test-DesktopRuntime10)) {
     if (-not (Test-DesktopRuntime10)) { Write-RtLog 'verify-failed'; exit 31337 }
     Write-RtLog 'runtime-download-install ok'
 }
+} # end phase DotNet
 
-# ---- 2) Windows App SDK 运行时 (界面框架, 1.8) ----
+# ---- 2) Windows App SDK 运行时 (界面框架, 1.8) (分段 2/3, CA: EnsureRtWinApp) ----
 # v1.1.2 自带改依赖: 界面框架不再打进安装包, 改装时保障。
 # 检测口径 (官方部署指南 deploy-unpackaged-apps 实锤): 运行时由四类 MSIX 包组成, 四者全在才算在位:
 #   Framework  Microsoft.WindowsAppRuntime.1.8*          (框架包, PackageDependency 指向它)
@@ -107,6 +115,7 @@ if ($ForceDownload -ne '1' -and (Test-DesktopRuntime10)) {
 # 安装口径: 官方 WindowsAppRuntimeInstall-x64.exe 静默装 (--quiet, 微软 winget 官方清单实锤);
 #   它内部走 AppX 部署服务装 MSIX 并 provisioning 给全体用户, 不走 MSI 链, 与本产品 MSI
 #   事务无 _MSIExecute 互斥 (dotnet-install 同理); 装后以实测为准, 不信安装器退出码。
+if ($phaseAll -or $RtPhase -eq 'WinAppSDK') {
 function Test-WinAppRuntime {
     # 目录探针 glob: 包目录形如 <family去掉通配>_<版本>-<架构>, 如 MicrosoftCorporationII.WinAppRuntime.Main.1.8_5004.131.914.0_x64__8wekyb3d8bbwe
     $families = @(
@@ -197,12 +206,14 @@ if ($ForceDownload -ne '1' -and (Test-WinAppRuntime)) {
     }
     Write-RtLog 'winappruntime-download-install ok'
 }
+} # end phase WinAppSDK
 
-# ---- 3) VC++ 2015-2022 运行库 ----
+# ---- 3) VC++ 2015-2022 运行库 (分段 3/3, CA: EnsureRtVc) ----
 # 官方部署指南明确: 依赖框架的未打包应用以 VC++ 可再发行包为先决条件, 缺失则程序起不来。
 # 检测口径: 注册表 Runtimes\x64 Installed=1 (Registry64 视图, 32 位 PS 重定向坑同上) 或
 #   System32 下 vcruntime140.dll 与 msvcp140.dll 双双在位; 安装器静默参数 /install /quiet /norestart,
 #   退出码 1638=已有更新版本 (算在位), 3010=需重启 (装齐, 重启后生效)。
+if ($phaseAll -or $RtPhase -eq 'VcRedist') {
 function Test-VcRuntime {
     try {
         $rk = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', [Microsoft.Win32.RegistryView]::Registry64)
@@ -237,5 +248,7 @@ if ($ForceDownload -ne '1' -and (Test-VcRuntime)) {
     if (-not (Test-VcRuntime)) { Write-RtLog 'vcruntime-verify-failed'; exit 31333 }
     Write-RtLog 'vcruntime-download-install ok'
 }
-Write-RtLog 'all-runtimes ok'
+} # end phase VcRedist
+# 收尾行只在最后一段 (或整跑) 落日志: 云测断言 all-runtimes ok 依赖它
+if ($phaseAll -or $RtPhase -eq 'VcRedist') { Write-RtLog 'all-runtimes ok' }
 exit 0

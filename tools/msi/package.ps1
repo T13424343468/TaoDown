@@ -386,7 +386,7 @@ $wxs = @"
                   Execute="immediate" Return="ignore" />
 
     <!-- 运行时保障 (2026-11-21 全系安装器新标准): 装完文件后检测/补装三项运行时
-         (.NET 10 桌面 / 界面框架 WinAppSDK 1.5 / VC++ 2015-2022), 卸载 REMOVE 时跳过;
+         (.NET 10 桌面 / 界面框架 WinAppSDK 1.8 / VC++ 2015-2022), 卸载 REMOVE 时跳过;
          失败即回滚, 无网时脚本弹通俗重试指引。必须是 deferred: immediate CA 在
          InstallFinalize 落盘脚本执行前跑, EnsureRuntime.ps1 还没装到盘上, powershell
          -File 找不到文件秒退 (TaoZip run 44877397577 实锤); deferred 排在 InstallFiles
@@ -395,7 +395,11 @@ $wxs = @"
          下载不弹命令窗 (全系安装器标准, TaoPad v1.1.3 同款): CA 改 WixQuietExec64
          (WixToolset.Util 扩展, 随包内置 tools/msi/wix/ext), 直接起 PowerShell 不再经
          cmd 包一层——旧写法 cmd 窗口在安装期可见。输出落盘改由 PowerShell 内联完成:
-         先建日志目录, 脚本输出 *>> 重定向到 ca-out.txt, 脚本自身另有 runtime log 双通道。 -->
+         先建日志目录, 脚本输出 *>> 重定向到 ca-out.txt, 脚本自身另有 runtime log 双通道。
+         分段进度 (2.4.3, 老板 2.4.2 真机实锤单 CA 下载段进度条长时间不动像卡死):
+         单 CA 拆成三个顺序 CA (EnsureRtDotNet → EnsureRtWinApp → EnsureRtVc), 各传
+         -RtPhase 只跑一段; MSI 进度条按动作数推进, 每段结束各推进一步, 用户看得到安装
+         在动。三段共用同一脚本与日志, 日志行与旧版完全一致, 云测断言不受影响。 -->
     <!-- 云测钩子属性: 断言二强制走下载路。环境变量传不进 msiexec 服务上下文
          (TaoZip run 44885229031 实锤), 改走 MSI 公共属性: msiexec /i xxx.msi TAODOWNFORCE=1;
          以 -ForceDownload 参数直传脚本 (cmd set 环境变量随 cmd 消失, 参数直达) -->
@@ -405,9 +409,17 @@ $wxs = @"
          先于其命令行属性求值, 起跑时属性还是空的直接 1721→1603。
          WixQuietExec64 约定: 与 CA 同名的属性承载完整命令行, 引号内引号用 &quot; 转义,
          PS 字符串用单引号避免冲突 -->
-    <SetProperty Id="EnsureRuntimes" After="InstallFiles" Sequence="execute"
-                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;New-Item -ItemType Directory -Force -Path '[CommonAppDataFolder]TaoDown' | Out-Null; &amp; '[INSTALLFOLDER]EnsureRuntime.ps1' -ForceDownload '[TAODOWNFORCE]' *>> '[CommonAppDataFolder]TaoDown\ca-out.txt'&quot;" />
-    <CustomAction Id="EnsureRuntimes" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+    <SetProperty Id="EnsureRtDotNet" After="InstallFiles" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;New-Item -ItemType Directory -Force -Path '[CommonAppDataFolder]TaoDown' | Out-Null; &amp; '[INSTALLFOLDER]EnsureRuntime.ps1' -ForceDownload '[TAODOWNFORCE]' -RtPhase 'DotNet' *>> '[CommonAppDataFolder]TaoDown\ca-out.txt'&quot;" />
+    <CustomAction Id="EnsureRtDotNet" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="deferred" Return="check" Impersonate="no" />
+    <SetProperty Id="EnsureRtWinApp" After="InstallFiles" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;New-Item -ItemType Directory -Force -Path '[CommonAppDataFolder]TaoDown' | Out-Null; &amp; '[INSTALLFOLDER]EnsureRuntime.ps1' -ForceDownload '[TAODOWNFORCE]' -RtPhase 'WinAppSDK' *>> '[CommonAppDataFolder]TaoDown\ca-out.txt'&quot;" />
+    <CustomAction Id="EnsureRtWinApp" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="deferred" Return="check" Impersonate="no" />
+    <SetProperty Id="EnsureRtVc" After="InstallFiles" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;New-Item -ItemType Directory -Force -Path '[CommonAppDataFolder]TaoDown' | Out-Null; &amp; '[INSTALLFOLDER]EnsureRuntime.ps1' -ForceDownload '[TAODOWNFORCE]' -RtPhase 'VcRedist' *>> '[CommonAppDataFolder]TaoDown\ca-out.txt'&quot;" />
+    <CustomAction Id="EnsureRtVc" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
                   Execute="deferred" Return="check" Impersonate="no" />
     <InstallExecuteSequence>
 
@@ -419,7 +431,11 @@ $wxs = @"
 
       <Custom Action="KillRunningTaoDownHost" After="SetKillCmdHost" />
 
-      <Custom Action="EnsureRuntimes" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="EnsureRtDotNet" After="InstallFiles" Condition="NOT REMOVE" />
+
+      <Custom Action="EnsureRtWinApp" After="EnsureRtDotNet" Condition="NOT REMOVE" />
+
+      <Custom Action="EnsureRtVc" After="EnsureRtWinApp" Condition="NOT REMOVE" />
 
       <Custom Action="SetDefaultInstallDir" Before="CostFinalize" />
 
