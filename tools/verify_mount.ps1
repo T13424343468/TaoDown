@@ -189,19 +189,31 @@ function Get-BrowserExe($spec) {
   return $null
 }
 
+# run 45085011200 实锤两层问题：① choco 社区源瞬时 503（Service Unavailable）三家全落空；
+# ② choco 对「找不到包/源不可达」默认退出 0（假成功），winget 兜底被跳过。
+# 修法：安装后以可执行文件真实在位为准（不认退出码面值）；choco 加 --fail-on-unfound 让未找到返回非零；
+# 源抖动按 3 轮重试（瞬时 503 常见），choco 不成就落 winget 兜底，两路都试满才判装不上。
+function Test-BrowserInstalled($spec) {
+  return $null -ne (Get-BrowserExe $spec)
+}
+
 function Install-Browser($spec) {
   if (-not $spec.Choco -and -not $spec.Winget) { return $false }
-  if ($spec.Choco) {
-    Write-Host ("  {0} 不在 runner 上，现场安装：choco install {1}" -f $spec.Name, $spec.Choco)
-    choco install $spec.Choco -y --no-progress 2>&1 | ForEach-Object { Write-Host "  choco: $_" }
-    if ($LASTEXITCODE -in 0,1641,3010) { Write-Host '  choco 安装完成'; return $true }
-    Write-Host "  choco 退出码 $LASTEXITCODE"
-  }
-  if ($spec.Winget) {
-    Write-Host ("  winget 兜底: {0}" -f $spec.Winget)
-    winget install --id $spec.Winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | ForEach-Object { Write-Host "  winget: $_" }
-    Write-Host ("  winget 退出码: {0}" -f $LASTEXITCODE)
-    if ($LASTEXITCODE -eq 0) { Write-Host '  winget 安装完成'; return $true }
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if ($spec.Choco) {
+      Write-Host ("  {0} 现场安装（第 {1} 轮）：choco install {2}" -f $spec.Name, $attempt, $spec.Choco)
+      choco install $spec.Choco -y --no-progress --fail-on-unfound 2>&1 | ForEach-Object { Write-Host "  choco: $_" }
+      if ($LASTEXITCODE -in 0,1641,3010 -and (Test-BrowserInstalled $spec)) { Write-Host '  choco 安装完成（可执行文件在位）'; return $true }
+      Write-Host "  choco 退出码 $LASTEXITCODE 或可执行文件未在位"
+    }
+    if ($spec.Winget) {
+      Write-Host ("  winget 兜底（第 {0} 轮）: {1}" -f $attempt, $spec.Winget)
+      winget install --id $spec.Winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | ForEach-Object { Write-Host "  winget: $_" }
+      Write-Host ("  winget 退出码: {0}" -f $LASTEXITCODE)
+      if ($LASTEXITCODE -eq 0 -and (Test-BrowserInstalled $spec)) { Write-Host '  winget 安装完成（可执行文件在位）'; return $true }
+    }
+    if (Test-BrowserInstalled $spec) { return $true }
+    if ($attempt -lt 3) { Write-Host '  安装源可能瞬时抖动，20 秒后重试'; Start-Sleep -Seconds 20 }
   }
   return $false
 }
@@ -210,7 +222,7 @@ $failed = New-Object System.Collections.Generic.List[string]
 foreach ($spec in $Browsers) {
   Write-Host ("=== 自动挂载·真挂载核验（{0}） ===" -f $spec.Name)
   $exe = Get-BrowserExe $spec
-  if (-not $exe -and $spec.Choco) {
+  if (-not $exe) {
     if (Install-Browser $spec) { $exe = Get-BrowserExe $spec }
   }
   if (-not $exe) {
