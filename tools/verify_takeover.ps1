@@ -445,37 +445,54 @@ foreach ($spec in $Browsers) {
   }
   Write-Host ("  {0} 扩展已挂载且启用，触发下载: {1}" -f $spec.Name, $Url)
 
-  Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-  $inboxBefore = @(Test-InboxHit).Count
-  # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
-  Start-Sleep -Seconds 8
-  Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-  Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", $Url
-  $taken = $null
-  for ($i = 0; $i -lt 30; $i++) {
+  # 逐家重试 (run 45179882140 教训): Edge 单家偶发拦截未生效——扩展挂载启用、下载真触发, 但收件箱/受理记录双空且
+  # 浏览器侧文件落盘; 同家同法此前多场全绿, 判定为 SW 唤醒时序抖动。修法: 每家给两次机会, 首次不成立即停浏览器、
+  # 重新预热再触发; 两次都不成立才记红, 失败消息注明含重试, 不静默放行。
+  $passOk = $false
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    if ($attempt -gt 1) {
+      Write-Host ("  {0} 第 {1} 次尝试: 重启浏览器重新预热后再触发" -f $spec.Name, $attempt)
+      Start-Sleep -Seconds 5
+    }
+    Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    $inboxBefore = @(Test-InboxHit).Count
+    # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
+    Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
+    Start-Sleep -Seconds 8
+    Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", $Url
+    $taken = $null
+    for ($i = 0; $i -lt 30; $i++) {
+      Start-Sleep -Seconds 2
+      $hit = Test-InboxHit
+      if ($hit) { $taken = $hit; break }
+    }
+    Start-Sleep -Seconds 3
+    Prep-Snap $spec.Proc
+    $snapName = if ($attempt -gt 1) { "evidence\takeover-{0}-try{1}.png" -f $spec.Name.ToLower(), $attempt } else { "evidence\takeover-{0}.png" -f $spec.Name.ToLower() }
+    Snap $snapName
+    Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    $hit = Test-InboxHit
-    if ($hit) { $taken = $hit; break }
-  }
-  Start-Sleep -Seconds 3
-  Prep-Snap $spec.Proc
-  Snap ("evidence\takeover-{0}.png" -f $spec.Name.ToLower())
-  Get-Process $spec.Proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
 
-  $kept = Test-BrowserKeptFile $spec.Proc
-  $logHit = Test-HostLogHit
-  $appHit = Test-AppLogHit
-  if (($taken -or $appHit) -and -not $kept) {
-    Write-Host ("  {0} 接管成立：收件箱={1}；主程序受理记录={2}；浏览器无成品文件；host.log 命中={3}" -f $spec.Name, $(if ($taken) { $taken.Name } else { '（已被主程序即时受理）' }), $appHit, $logHit)
-    $report[$spec.Name] = @{ inbox = $(if ($taken) { $taken.Name } else { 'consumed-by-app' }); browserKeptFile = $false; hostLog = $logHit; appLog = $appHit }
-  } else {
-    $why = @()
-    if (-not ($taken -or $appHit)) { $why += '收件箱无转交记录（且主程序无受理记录）' }
-    if ($kept) { $why += '浏览器侧文件已落盘（未被取消）' }
-    $failed.Add("$($spec.Name)：接管不成立（$($why -join '；')）")
-    Write-Host ("  {0} 接管不成立：{1}" -f $spec.Name, ($why -join '；'))
+    $kept = Test-BrowserKeptFile $spec.Proc
+    $logHit = Test-HostLogHit
+    $appHit = Test-AppLogHit
+    if (($taken -or $appHit) -and -not $kept) {
+      Write-Host ("  {0} 接管成立：收件箱={1}；主程序受理记录={2}；浏览器无成品文件；host.log 命中={3}" -f $spec.Name, $(if ($taken) { $taken.Name } else { '（已被主程序即时受理）' }), $appHit, $logHit)
+      $report[$spec.Name] = @{ inbox = $(if ($taken) { $taken.Name } else { 'consumed-by-app' }); browserKeptFile = $false; hostLog = $logHit; appLog = $appHit; attempts = $attempt }
+      $passOk = $true
+      break
+    } else {
+      $why = @()
+      if (-not ($taken -or $appHit)) { $why += '收件箱无转交记录（且主程序无受理记录）' }
+      if ($kept) { $why += '浏览器侧文件已落盘（未被取消）' }
+      if ($attempt -lt 2) {
+        Write-Host ("  {0} 第 1 次接管不成立（{1}），重试一次" -f $spec.Name, ($why -join '；'))
+      } else {
+        $failed.Add("$($spec.Name)：接管不成立（$($why -join '；')，重试后仍不成立）")
+        Write-Host ("  {0} 接管不成立：{1}" -f $spec.Name, ($why -join '；'))
+      }
+    }
   }
 }
 
