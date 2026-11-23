@@ -236,7 +236,7 @@ $Browsers = @(
   @{ Name='Chrome';   Proc='chrome';  ExeFile='chrome.exe';  Choco='googlechrome'; Winget='Google.Chrome';       Exes=@('C:\Program Files\Google\Chrome\Application\chrome.exe','C:\Program Files (x86)\Google\Chrome\Application\chrome.exe') },
   @{ Name='Chromium'; Proc='chrome';  ExeFile='chrome.exe';  Choco='chromium';     Winget='Hibbiki.Chromium';    Exes=@('C:\Program Files\Chromium\Application\chrome.exe') },
   @{ Name='Brave';    Proc='brave';   ExeFile='brave.exe';   Choco='brave';        Winget='BraveSoftware.BraveBrowser'; Exes=@('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe','C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe') },
-  @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';      Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") },
+  @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';      Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") }
   # Yandex：老板 2026-11-23 拍板「这家不管了」——移出自动口径，不测不承诺；
   # 其对扩展打 DISABLE_USER_ACTION(1)（run 45152500256 实锤），真实用户也点不动开关。
 )
