@@ -138,7 +138,7 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
     $ready = $false
     for ($i = 0; $i -lt 20; $i++) {
       Start-Sleep -Milliseconds 800
-      & $send @{ id = 1; method = 'Runtime.evaluate'; params = @{ expression = "typeof chrome !== 'undefined' && typeof chrome.management !== 'undefined'"; returnByValue = $true } }
+      & $send @{ id = 1; method = 'Runtime.evaluate'; params = @{ expression = "typeof chrome !== 'undefined' && typeof chrome.management !== 'undefined'"; returnByValue = $true; userGesture = $true } }
       $resp = & $recv 1
       if ($resp -and $resp.result -and $resp.result.result -and $resp.result.result.value -eq $true) { $ready = $true; break }
     }
@@ -176,7 +176,7 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
 })()
 '@
       $domJs = $domJs.Replace('__EXTID__', $ExtId)
-      & $send @{ id = 3; method = 'Runtime.evaluate'; params = @{ expression = $domJs; awaitPromise = $true; returnByValue = $true } }
+      & $send @{ id = 3; method = 'Runtime.evaluate'; params = @{ expression = $domJs; awaitPromise = $true; returnByValue = $true; userGesture = $true } }
       $resp3 = & $recv 3
       if (-not $resp3) { throw 'CDP DOM 开关点击无回包' }
       if ($resp3.error) { throw ("CDP DOM 开关点击失败: " + ($resp3.error | ConvertTo-Json -Compress)) }
@@ -184,7 +184,10 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
       Write-Host ("  DOM 开关点击结果: {0}" -f $resp3.result.result.value)
       return
     }
-    & $send @{ id = 2; method = 'Runtime.evaluate'; params = @{ expression = "chrome.management.setEnabled('$ExtId', true)"; awaitPromise = $true; returnByValue = $true } }
+    # userGesture=true (run 45203184726 实锤): Edge 对权限提升类禁用 (8192) 的重新启用强制要求
+    # 用户手势, 不带该标记 setEnabled 直接抛 "requires a user gesture"; Chrome/Chromium 同路
+    # 不带也能过, 带上对它们无副作用——统一带上, 与真实用户点开关同语义
+    & $send @{ id = 2; method = 'Runtime.evaluate'; params = @{ expression = "chrome.management.setEnabled('$ExtId', true)"; awaitPromise = $true; returnByValue = $true; userGesture = $true } }
     $resp2 = & $recv 2
     if (-not $resp2) { throw 'CDP setEnabled 无回包' }
     if ($resp2.error) { throw ("CDP setEnabled 失败: " + ($resp2.error | ConvertTo-Json -Compress)) }
