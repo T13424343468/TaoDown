@@ -1,10 +1,13 @@
-﻿# 六家浏览器下载接管实测（老板 2026-11-21 附加核验令）：
-# 挂载成功 ≠ 接管成功。本脚本对自动挂载清单内的全部 Chromium 内核浏览器——
-# Edge、Chrome、Chromium、Brave、Vivaldi、Yandex——逐家真启动、真触发一条下载，
+﻿# 五家浏览器下载接管实测（老板 2026-11-21 附加核验令；Yandex 2026-11-23 老板拍板免测）：
+# 挂载成功 ≠ 接管成功。本脚本对自动挂载清单内的 Chromium 内核浏览器——
+# Edge、Chrome、Chromium、Brave、Vivaldi——逐家真启动、真触发一条下载，
 # 断言两件事同时成立才算接管：
 #   ① 浏览器侧下载被取消：Downloads 目录没有成品文件（接管失败的浏览器会自己下完）；
 #   ② 接管链路收到转交：收件箱出现含测试 URL 的 JSON（宿主 SaveToInbox 落盘）
-#      且 host.log 有「收到插件请求」记录。
+#      且 host.log 有「收到插件请求」记录；
+#   ②' v2.4.3 起主程序未运行会被宿主自动拉起并即时受理收件箱（受理后条目即删，
+#      run 45161816189 六家全误判实锤）——startup.log 命中「收件箱受理：测试URL」
+#      与收件箱文件在位等价成立，二者取其一即可。
 # 证据全部落盘 evidence\；任何一家不过整步报红，不允许静默跳过。
 # 夸克/360 为手动挂载内核（下载监听停用，接管走右键菜单），不在本自动覆盖口径内。
 $ErrorActionPreference = 'Stop'
@@ -15,6 +18,7 @@ $Url = "http://127.0.0.1:$Port/takeover.bin"
 # ---- 数据根（与 TaoDown.Core.DataRoot 同口径：D 盘首选，回退本地）----
 $InboxDirs = @('D:\TaoDownData\TaoDown\inbox', "$env:LOCALAPPDATA\TaoDownData\TaoDown\inbox")
 $HostLogs = @('D:\TaoDownData\TaoDown\logs\host.log', "$env:LOCALAPPDATA\TaoDownData\TaoDown\logs\host.log")
+$AppLogs = @('D:\TaoDownData\TaoDown\logs\startup.log', "$env:LOCALAPPDATA\TaoDownData\TaoDown\logs\startup.log")
 
 Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force -Path evidence | Out-Null
@@ -210,6 +214,16 @@ function Test-HostLogHit {
   return $false
 }
 
+function Test-AppLogHit {
+  # v2.4.3 自动拉起后主程序受理收件箱即删条目（BrowserInboxWatcher.HandleAsync File.Delete），
+  # 轮询窗口撞不上文件不等于没接管——startup.log 的「收件箱受理：URL」是等价铁证。
+  foreach ($l in $AppLogs) {
+    if (-not (Test-Path $l)) { continue }
+    if (Select-String -Path $l -Pattern ("收件箱受理：" + [regex]::Escape($Url)) -ErrorAction SilentlyContinue) { return $true }
+  }
+  return $false
+}
+
 function Test-BrowserKeptFile([string]$ProcName) {
   # 接管失败时浏览器会把文件下进系统 Downloads（新资料目录默认下载目录）
   $hits = @(Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue)
@@ -223,7 +237,8 @@ $Browsers = @(
   @{ Name='Chromium'; Proc='chrome';  ExeFile='chrome.exe';  Choco='chromium';     Winget='Hibbiki.Chromium';    Exes=@('C:\Program Files\Chromium\Application\chrome.exe') },
   @{ Name='Brave';    Proc='brave';   ExeFile='brave.exe';   Choco='brave';        Winget='BraveSoftware.BraveBrowser'; Exes=@('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe','C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe') },
   @{ Name='Vivaldi';  Proc='vivaldi'; ExeFile='vivaldi.exe'; Choco='vivaldi';      Winget='Vivaldi.Vivaldi';     Exes=@('C:\Program Files\Vivaldi\Application\vivaldi.exe',"$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe") },
-  @{ Name='Yandex';   Proc='browser'; ExeFile='browser.exe'; Choco='yandex-browser'; Winget='Yandex.Browser';    Exes=@('C:\Program Files\Yandex\YandexBrowser\browser.exe',"$env:LOCALAPPDATA\Yandex\YandexBrowser\Application\browser.exe") }
+  # Yandex：老板 2026-11-23 拍板「这家不管了」——移出自动口径，不测不承诺；
+  # 其对扩展打 DISABLE_USER_ACTION(1)（run 45152500256 实锤），真实用户也点不动开关。
 )
 
 function Get-BrowserExe($spec) {
@@ -430,6 +445,7 @@ foreach ($spec in $Browsers) {
   }
   Write-Host ("  {0} 扩展已挂载且启用，触发下载: {1}" -f $spec.Name, $Url)
 
+  Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
   $inboxBefore = @(Test-InboxHit).Count
   # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
   Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
@@ -450,12 +466,13 @@ foreach ($spec in $Browsers) {
 
   $kept = Test-BrowserKeptFile $spec.Proc
   $logHit = Test-HostLogHit
-  if ($taken -and -not $kept) {
-    Write-Host ("  {0} 接管成立：收件箱 {1}；浏览器无成品文件；host.log 命中={2}" -f $spec.Name, $taken.Name, $logHit)
-    $report[$spec.Name] = @{ inbox = $taken.Name; browserKeptFile = $false; hostLog = $logHit }
+  $appHit = Test-AppLogHit
+  if (($taken -or $appHit) -and -not $kept) {
+    Write-Host ("  {0} 接管成立：收件箱={1}；主程序受理记录={2}；浏览器无成品文件；host.log 命中={3}" -f $spec.Name, $(if ($taken) { $taken.Name } else { '（已被主程序即时受理）' }), $appHit, $logHit)
+    $report[$spec.Name] = @{ inbox = $(if ($taken) { $taken.Name } else { 'consumed-by-app' }); browserKeptFile = $false; hostLog = $logHit; appLog = $appHit }
   } else {
     $why = @()
-    if (-not $taken) { $why += '收件箱无转交记录' }
+    if (-not ($taken -or $appHit)) { $why += '收件箱无转交记录（且主程序无受理记录）' }
     if ($kept) { $why += '浏览器侧文件已落盘（未被取消）' }
     $failed.Add("$($spec.Name)：接管不成立（$($why -join '；')）")
     Write-Host ("  {0} 接管不成立：{1}" -f $spec.Name, ($why -join '；'))
@@ -551,5 +568,5 @@ try { $srcPs.Stop(); $srcRs.Close() } catch { }
 Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
-if ($failed.Count -gt 0) { throw ("下载接管实测不过（六家逐家口径）：{0}" -f ($failed -join '；')) }
-Write-Host '下载接管实测通过：六家浏览器逐家真触发下载、转交进收件箱、浏览器侧零成品文件'
+if ($failed.Count -gt 0) { throw ("下载接管实测不过（五家逐家口径）：{0}" -f ($failed -join '；')) }
+Write-Host '下载接管实测通过：五家浏览器逐家真触发下载、转交进收件箱或主程序即时受理、浏览器侧零成品文件'
