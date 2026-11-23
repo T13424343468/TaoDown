@@ -368,15 +368,20 @@ foreach ($spec in $Browsers) {
   # Yandex 退出该路 (run 45152500256 实锤): Yandex 对注册表外部安装打 DISABLE_USER_ACTION(1),
   # 开关在 UI 上对真实用户也是灰的, 模拟启用结构性不可达 (chrome.management 在其 WebUI 不可用,
   # CDP evaluate 打扩展页回 Forbidden); Yandex 非 Google 品牌, --load-extension 未打包加载路
-  # 与 Edge/Brave/Vivaldi 同口径照测接管行为。
-  $NeedsUserEnable = @('Chrome', 'Chromium') -contains $spec.Name
+  # 与 Brave/Vivaldi 同口径照测接管行为。
+  # Edge 加入该路 (run 45194592990 定谳): Edge 未打包加载两 attempts 连 warmup 都不发送——扩展
+  # 挂载启用但 SW 拦截链路全程哑火 (host.log 零请求), 同法 Brave/Vivaldi 全绿、Edge 此前多场也绿,
+  # 判定为新版 Edge 对 --load-extension 的 SW 策略变化; 改走注册表外部安装 + CDP 用户启用路
+  # (与 Chrome/Chromium 同款, 即真实装机路径), 不再依赖 --load-extension。
+  $NeedsUserEnable = @('Chrome', 'Chromium', 'Edge') -contains $spec.Name
 
   # 每家独立资料目录：扩展按登记自动挂载（与 verify_mount 同机制）
   $prof = Join-Path $PWD ("evidence\takeover-{0}-profile" -f $spec.Name.ToLower())
   Remove-Item $prof -Recurse -Force -ErrorAction SilentlyContinue
   # --enable-logging: SW 控制台与 native messaging 报错落 chrome_debug.log (run 44991534420 六家全不接管却无浏览器侧第一手日志, 归因断粮)
-  # --load-extension: Edge/Brave/Vivaldi 非 Google 品牌仍走未打包加载 (location=8), 接管行为照测;
-  #   Chrome/Chromium/Yandex 该 flag 被品牌版无视, 扩展走登记键外部安装 (见上)。
+  # --load-extension: Brave/Vivaldi 非 Google 品牌仍走未打包加载 (location=8), 接管行为照测;
+  #   Chrome/Chromium/Edge 该路已弃 (Chrome 品牌版无视 flag; Edge 新版 SW 哑火, run 45194592990),
+  #   扩展走登记键外部安装 + CDP 用户启用 (见上)。
   $extDir = (Resolve-Path (Join-Path $PSScriptRoot '..\src\extension')).Path
   Write-Host ("  扩展加载方式: " + $(if ($NeedsUserEnable) { "注册表外部安装 (模拟真实装机, 用户一次启用后接管)" } else { "未打包加载" }) + " — 扩展目录: " + $extDir)
   # 逐家开跑前再停主程序、再清一遍登记键并断言（run 45029338370/45033054105 教训：主程序存活时
@@ -398,6 +403,8 @@ foreach ($spec in $Browsers) {
         'HKCU:\Software\Google\Chrome\Extensions', 'HKLM:\Software\Google\Chrome\Extensions',
         'HKLM:\Software\Wow6432Node\Google\Chrome\Extensions',
         'HKCU:\Software\Chromium\Extensions', 'HKLM:\Software\Chromium\Extensions',
+        'HKCU:\Software\Microsoft\Edge\Extensions', 'HKLM:\Software\Microsoft\Edge\Extensions',
+        'HKLM:\Software\Wow6432Node\Microsoft\Edge\Extensions',
         'HKCU:\Software\Yandex\YandexBrowser\Extensions', 'HKLM:\Software\Yandex\YandexBrowser\Extensions',
         'HKCU:\Software\YandexBrowser\Extensions', 'HKLM:\Software\YandexBrowser\Extensions')) {
       try {
@@ -457,10 +464,20 @@ foreach ($spec in $Browsers) {
     Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'takeover*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     $inboxBefore = @(Test-InboxHit).Count
     # SW 预热 (run 44991534420 归因待证): 挂载后先触发一条预热下载, 唤醒 Service Worker 并走通监听注册, 再清残留跑正式实测
-    Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
+    # 预热参数随加载路走 (run 45194592990 教训): 注册表安装路 (Chrome/Chromium/Edge) 不带 --load-extension,
+    # 防非品牌内核 (Edge) 把未打包实例与外部安装同 ID 合并、SW 再被打断
+    if ($NeedsUserEnable) {
+      Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "http://127.0.0.1:$Port/warmup.bin"
+    } else {
+      Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", "http://127.0.0.1:$Port/warmup.bin"
+    }
     Start-Sleep -Seconds 8
     Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'warmup*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", $Url
+    if ($NeedsUserEnable) {
+      Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", $Url
+    } else {
+      Start-Process $exe -ArgumentList "--user-data-dir=`"$prof`"", "--disable-features=DisableLoadExtensionCommandLineSwitch", "--load-extension=`"$extDir`"", $Url
+    }
     $taken = $null
     for ($i = 0; $i -lt 30; $i++) {
       Start-Sleep -Seconds 2
