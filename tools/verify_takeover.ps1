@@ -138,7 +138,48 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
       $resp = & $recv 1
       if ($resp -and $resp.result -and $resp.result.result -and $resp.result.result.value -eq $true) { $ready = $true; break }
     }
-    if (-not $ready) { throw 'chrome.management 在 chrome://extensions 页面不可用' }
+    if (-not $ready) {
+      # Yandex 实锤 (run 45146764146): chrome.management 在其扩展页 WebUI 不可用,
+      # 退回真实用户口径的另一实现——递归穿 shadow DOM 找到扩展条目的 cr-toggle 真点一次
+      # (与页面开关同一控件, chromium extensions_item.html cr-toggle#enableToggle)。
+      # 点击后由调用方轮询 disable_reasons 断言启用落盘, 点不上照旧报红不静默。
+      Write-Host '  chrome.management 不可用，退回页面开关 DOM 点击…'
+      $domJs = @'
+(async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  for (let t = 0; t < 20; t++) {
+    const items = [];
+    const walk = (root) => {
+      for (const el of root.querySelectorAll('*')) {
+        if (el.tagName === 'EXTENSIONS-ITEM') items.push(el);
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(document);
+    for (const item of items) {
+      if (item.id && item.id !== '__EXTID__') continue;
+      const sr = item.shadowRoot;
+      if (!sr) continue;
+      const toggle = sr.querySelector('cr-toggle');
+      if (!toggle) continue;
+      if (toggle.checked) return 'already-on';
+      toggle.click();
+      return 'clicked';
+    }
+    await sleep(500);
+  }
+  return 'no-toggle';
+})()
+'@
+      $domJs = $domJs.Replace('__EXTID__', $ExtId)
+      & $send @{ id = 3; method = 'Runtime.evaluate'; params = @{ expression = $domJs; awaitPromise = $true; returnByValue = $true } }
+      $resp3 = & $recv 3
+      if (-not $resp3) { throw 'CDP DOM 开关点击无回包' }
+      if ($resp3.error) { throw ("CDP DOM 开关点击失败: " + ($resp3.error | ConvertTo-Json -Compress)) }
+      if ($resp3.result.exceptionDetails) { throw ("CDP DOM 开关点击异常: " + ($resp3.result.exceptionDetails | ConvertTo-Json -Compress)) }
+      Write-Host ("  DOM 开关点击结果: {0}" -f $resp3.result.result.value)
+      return
+    }
     & $send @{ id = 2; method = 'Runtime.evaluate'; params = @{ expression = "chrome.management.setEnabled('$ExtId', true)"; awaitPromise = $true; returnByValue = $true } }
     $resp2 = & $recv 2
     if (-not $resp2) { throw 'CDP setEnabled 无回包' }
