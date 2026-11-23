@@ -345,12 +345,16 @@ foreach ($spec in $Browsers) {
   $exe = Get-BrowserExe $spec
   if (-not $exe) { $failed.Add("$($spec.Name)：浏览器不在位，未覆盖"); continue }
 
-  # Chrome/Chromium/Yandex 走真实用户路径 (run 45116390905 口径): Google 品牌 Chrome 137+ 无视
+  # Chrome/Chromium 走真实用户路径 (run 45116390905 口径): Google 品牌 Chrome 137+ 无视
   # --load-extension (chrome_debug.log 原话 "--load-extension is not allowed in Google Chrome,
   # ignoring"), 恢复开关在 157 实测无效; 真实装机后扩展经注册表外部安装进资料目录、装上即待用户
-  # 确认 (8192/1), 用户在 chrome://extensions 开一次开关即启用。本步重写登记键模拟装机状态,
+  # 确认 (8192), 用户在 chrome://extensions 开一次开关即启用。本步重写登记键模拟装机状态,
   # 再用 CDP 模拟用户开关, 然后实测接管——不静默跳过, 启用失败即报红。
-  $NeedsUserEnable = @('Chrome', 'Chromium', 'Yandex') -contains $spec.Name
+  # Yandex 退出该路 (run 45152500256 实锤): Yandex 对注册表外部安装打 DISABLE_USER_ACTION(1),
+  # 开关在 UI 上对真实用户也是灰的, 模拟启用结构性不可达 (chrome.management 在其 WebUI 不可用,
+  # CDP evaluate 打扩展页回 Forbidden); Yandex 非 Google 品牌, --load-extension 未打包加载路
+  # 与 Edge/Brave/Vivaldi 同口径照测接管行为。
+  $NeedsUserEnable = @('Chrome', 'Chromium') -contains $spec.Name
 
   # 每家独立资料目录：扩展按登记自动挂载（与 verify_mount 同机制）
   $prof = Join-Path $PWD ("evidence\takeover-{0}-profile" -f $spec.Name.ToLower())
