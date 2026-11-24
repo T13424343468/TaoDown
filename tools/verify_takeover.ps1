@@ -15,6 +15,15 @@ $Id = 'dchnmdakoleaofgpkhddhmohcoomlimp'
 $Port = 18098
 $Url = "http://127.0.0.1:$Port/takeover.bin"
 
+# 整步看门狗 (run 45217460009 实锤): 脚本内所有等待虽有上限, 但任何漏网的单点阻塞都会把整步
+# 拖到 210 分钟整场超时被取消, 证据都取不回来。整步超过 75 分钟即强制报红收口, 把整场预算
+# 留给后续关卡; 已发现的失败清单随异常带出, 不静默。
+$TakeoverStart = [DateTime]::UtcNow
+function Assert-TakeoverBudget {
+  $el = ([DateTime]::UtcNow - $TakeoverStart).TotalMinutes
+  if ($el -gt 75) { throw ("接管实测超出 75 分钟预算 (已 {0:N0} 分钟), 强制收口防拖垮整场; 已记失败: {1}" -f $el, ($failed -join ' | ')) }
+}
+
 # ---- 数据根（与 TaoDown.Core.DataRoot 同口径：D 盘首选，回退本地）----
 $InboxDirs = @('D:\TaoDownData\TaoDown\inbox', "$env:LOCALAPPDATA\TaoDownData\TaoDown\inbox")
 $HostLogs = @('D:\TaoDownData\TaoDown\logs\host.log', "$env:LOCALAPPDATA\TaoDownData\TaoDown\logs\host.log")
@@ -123,11 +132,21 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
         $ms = [System.IO.MemoryStream]::new()
         while ($true) {
           $seg = [ArraySegment[byte]]::new($buf)
-          $r = $ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+          # run 45217460009 实锤: ReceiveAsync 用 CancellationToken.None 时, 浏览器侧一旦
+          # 不回帧 (WebUI 挂起/连接半死), 这里永久阻塞——30s 期限只在两次 receive 之间检查,
+          # 拦不住单次阻塞, 整步被拖到 210 分钟整场超时被取消。改为单次 receive 10s 超时,
+          # 超时回外层查总期限, 期限到返回 $null 由调用方按失败报红。
+          $rxCts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(10))
+          try {
+            $r = $ws.ReceiveAsync($seg, $rxCts.Token).GetAwaiter().GetResult()
+          } catch [System.OperationCanceledException] {
+            break  # 10 秒无帧, 回外层查总期限
+          } finally { $rxCts.Dispose() }
           if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { throw 'CDP 连接被对端关闭' }
           $ms.Write($buf, 0, $r.Count)
           if ($r.EndOfMessage) { break }
         }
+        if ($ms.Length -eq 0) { continue }  # 本轮未收到完整帧, 回外层查总期限
         $msg = [Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
         if ($msg.id -ne $wantId) { continue }  # 事件帧跳过, 只认命令回包
         return $msg
@@ -359,6 +378,7 @@ foreach ($k in $policyRoots.Keys) {
 }
 
 foreach ($spec in $Browsers) {
+  Assert-TakeoverBudget
   Write-Host ("=== 下载接管实测（{0}） ===" -f $spec.Name)
   $exe = Get-BrowserExe $spec
   if (-not $exe) { $failed.Add("$($spec.Name)：浏览器不在位，未覆盖"); continue }
@@ -460,6 +480,7 @@ foreach ($spec in $Browsers) {
   # 重新预热再触发; 两次都不成立才记红, 失败消息注明含重试, 不静默放行。
   $passOk = $false
   for ($attempt = 1; $attempt -le 2; $attempt++) {
+    Assert-TakeoverBudget
     if ($attempt -gt 1) {
       Write-Host ("  {0} 第 {1} 次尝试: 重启浏览器重新预热后再触发" -f $spec.Name, $attempt)
       Start-Sleep -Seconds 5
