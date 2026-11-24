@@ -113,13 +113,13 @@ $CdpPort = 9223
 # run 45347122150 实锤: Edge 在 setEnabled 等回包时 CDP 连接被对端中止 (WebSocket 'Aborted'),
 # 启用指令可能已生效但回包丢失。修法两层: ① 连接级重试——连接/发送/接收任何一环断开,
 # 重建连接重试, 最多 3 次; ② 调用方 catch 后照旧轮询 disable_reasons——回包丢了不等于没启用。
-function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
+function Enable-ExtensionAsUser([int]$Port, [string]$ExtId, [string]$ProcName, [string]$ExtName) {
   # run 45361560341 实锤: 3 次重试每轮 25s 无帧全灭, Edge WebUI 冷启可超 25s——重试加到 5 次,
   # 配合单次收包 60s, 给慢 WebUI 总计 5 分钟有界窗口
   for ($try = 1; $try -le 5; $try++) {
     try {
       if ($try -gt 1) { Write-Host ("  CDP 连接第 {0} 次重试…" -f $try); Start-Sleep -Seconds 2 }
-      Enable-ExtensionAsUserOnce $Port $ExtId
+      Enable-ExtensionAsUserOnce $Port $ExtId $ProcName $ExtName
       return
     } catch {
       if ($try -ge 5) { throw }
@@ -127,7 +127,7 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
     }
   }
 }
-function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
+function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId, [string]$ProcName, [string]$ExtName) {
   # run 45367447019 实锤: 重试轮次留下的 chrome://extensions 旧标签页(可能挂着未确认弹窗)不清,
   # 新标签页的启用会被旧弹窗搅局——每轮先关掉全部 extensions 页再开新页
   try {
@@ -151,7 +151,10 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
   try {
     $buf = New-Object byte[] (1MB)
     # run 45367447019 实锤: setEnabled 与弹窗点击两条命令并发在途, 先到的回包若不是正在等的
-    # id 会被直接丢弃, 后续再等那个 id 就永远等不到——回包按 id 缓存, 谁先来存谁
+    # id 会被直接丢弃, 后续再等那个 id 就永远等不到——回包按 id 缓存, 谁先来存谁。
+    # run 45382156935 复锤: 缓存键必须统一转字符串——CDP 回包 id 经 ConvertFrom-Json 是 Int64,
+    # 查询侧传的是 Int32, Hashtable.ContainsKey 走 .NET 严格类型比较, Int64 2 ≠ Int32 2,
+    # 缓存永远查不中, Chrome 的回包也被"丢"成 60s 超时 (启用其实已生效, 靠复核兜住)。
     $pending = @{}
     $send = {
       param($obj)
@@ -160,7 +163,8 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
     }
     $recv = {
       param($wantId)
-      if ($pending.ContainsKey($wantId)) { $r = $pending[$wantId]; $pending.Remove($wantId); return $r }
+      $wantKey = [string]$wantId
+      if ($pending.ContainsKey($wantKey)) { $r = $pending[$wantKey]; $pending.Remove($wantKey); return $r }
       # run 45352372082 实锤: Edge 的 chrome://extensions WebUI 冷启首帧回包可超 10s
       # (日志 08:19:38.7→08:19:48.7 整 10s 无帧), 单次 receive 10s 超时把 ClientWebSocket
       # 整个 Abort——后续 send 全报 "invalid state ('Aborted')", 3 次重连每轮都撞同一堵墙,
@@ -190,8 +194,8 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
         if ($ms.Length -eq 0) { continue }  # 本轮未收到完整帧, 回外层查总期限
         $msg = [Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
         if ($null -eq $msg.id) { continue }  # 事件帧跳过, 只认命令回包
-        if ($msg.id -eq $wantId) { return $msg }
-        $pending[$msg.id] = $msg  # 别的 id 的回包先缓存, 不丢
+        if ([string]$msg.id -eq $wantKey) { return $msg }
+        $pending[[string]$msg.id] = $msg  # 别的 id 的回包先缓存 (字符串键, 免 Int64/Int32 类型坑), 不丢
         continue
       }
       return $null
@@ -292,16 +296,69 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
 '@
     & $send @{ id = 3; method = 'Runtime.evaluate'; params = @{ expression = $dialogJs; awaitPromise = $true; returnByValue = $true; userGesture = $true } }
     $resp3 = & $recv 3
+    $dlgVal = $null
     if ($resp3 -and -not $resp3.error -and -not $resp3.result.exceptionDetails) {
-      Write-Host ("  确认弹窗处理结果: {0}" -f $resp3.result.result.value)
+      $dlgVal = $resp3.result.result.value
+      Write-Host ("  确认弹窗处理结果: {0}" -f $dlgVal)
     } else {
       Write-Host '  确认弹窗探测未返回（继续等 setEnabled 回包）'
+    }
+    # run 45382156935 实锤: Edge 的确认拦截不在 extensions 页 DOM (no-dialog×5), setEnabled promise
+    # 依旧挂死——CDP 够不着的层走真实用户路径: UIA 在浏览器窗口里找确认按钮/扩展开关实弹点击,
+    # 同时把按钮清单与整屏截图落证据, 一场同时拿到诊断与修复。
+    if ($dlgVal -eq 'no-dialog' -and $ProcName) {
+      $uia = Invoke-UiaConfirmEnable -ProcName $ProcName -ExtName $ExtName
+      Write-Host ("  UIA 实弹结果: {0}" -f $uia)
     }
     $resp2 = & $recv 2
     if (-not $resp2) { throw 'CDP setEnabled 无回包' }
     if ($resp2.error) { throw ("CDP setEnabled 失败: " + ($resp2.error | ConvertTo-Json -Compress)) }
     if ($resp2.result.exceptionDetails) { throw ("CDP setEnabled 异常: " + ($resp2.result.exceptionDetails | ConvertTo-Json -Compress)) }
   } finally { $ws.Dispose() }
+}
+
+# ---- UIA 实弹确认（run 45382156935 实锤的 Edge 兜底）----
+# Edge 的 setEnabled promise 挂死, 且 extensions 页 DOM 里无任何确认弹窗 (no-dialog×5)——
+# 拦截层不在 WebUI, 可能是原生对话框或要求真实输入。CDP 够不着的层走真实用户路径:
+# UIA 在浏览器窗口里找确认按钮/扩展开关实弹点击, 同时把按钮清单与整屏截图落证据,
+# 一场同时拿到诊断与修复。只对 Edge 启用, Chrome/Chromium 的 CDP 路已够用。
+function Invoke-UiaConfirmEnable([string]$ProcName, [string]$ExtName) {
+  try {
+    Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+    Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+  } catch { return 'uia-asm-load-failed' }
+  Prep-Snap $ProcName
+  Snap "evidence\takeover-$ProcName-enable-uia.png"
+  $aff = '^(允许|启用|确定|确认|打开|添加|信任|allow|enable|confirm|ok|yes|add|trust|turn on)$'
+  $btnNames = New-Object System.Collections.Generic.List[string]
+  $tgNames = New-Object System.Collections.Generic.List[string]
+  for ($i = 0; $i -lt 10; $i++) {
+    Start-Sleep -Seconds 2
+    $proc = Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if (-not $proc) { continue }
+    try {
+      $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+      $btnCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+      foreach ($el in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)) {
+        $n = $el.Current.Name
+        if (-not $n) { continue }
+        if ($btnNames.Count -lt 40 -and -not $btnNames.Contains($n)) { $btnNames.Add($n) }
+        if ($n -match $aff) {
+          try { ($el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke(); Write-Host ("  UIA 点了确认按钮: {0}" -f $n); return "uia-clicked:$n" } catch { }
+        }
+      }
+      # 扩展开关: cr-toggle 经 UIA 暴露, 名字含扩展名——真实用户就是点它
+      foreach ($el in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+        $n = $el.Current.Name
+        if (-not $n -or $n -notlike "*$ExtName*") { continue }
+        try { ($el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle(); Write-Host ("  UIA 拨了扩展开关: {0}" -f $n); return "uia-toggled:$n" } catch { }
+        if ($tgNames.Count -lt 20 -and -not $tgNames.Contains($n)) { $tgNames.Add($n) }
+      }
+    } catch { }
+  }
+  if ($btnNames.Count -gt 0) { Write-Host ("  UIA 窗口按钮清单: {0}" -f ($btnNames -join ' | ')) }
+  if ($tgNames.Count -gt 0) { Write-Host ("  UIA 扩展名元素清单: {0}" -f ($tgNames -join ' | ')) }
+  return 'uia-no-target'
 }
 
 # 读资料目录里扩展的 disable_reasons（挂载≠启用, 非空即待处理）
@@ -545,8 +602,9 @@ foreach ($spec in $Browsers) {
     # 真实用户路径: 模拟用户在 chrome://extensions 开一次开关 (CDP 调 chrome.management.setEnabled,
     # 与页面开关同一实现), 再断言启用态落盘
     Write-Host ("  {0} 扩展待用户确认 (disable_reasons={1})，模拟用户启用…" -f $spec.Name, ($dr -join ','))
+    $extName = (Get-Content (Join-Path $extDir 'manifest.json') -Raw | ConvertFrom-Json).name
     try {
-      Enable-ExtensionAsUser $CdpPort $Id
+      Enable-ExtensionAsUser $CdpPort $Id $spec.Proc $extName
       for ($i = 0; $i -lt 15; $i++) {
         Start-Sleep -Seconds 2
         $dr2 = Get-DisableReasons $prof $Id
