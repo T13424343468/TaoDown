@@ -98,6 +98,27 @@ $rtSrc = Join-Path $PSScriptRoot 'EnsureRuntime.ps1'
 if (-not (Test-Path $rtSrc)) { throw "运行时保障脚本缺失: $rtSrc (请使用完整包)" }
 Copy-Item $rtSrc (Join-Path $publishRoot 'EnsureRuntime.ps1') -Force
 
+# ---- 内置兜底 (2026-11-24 老板拍板三步走): 检测已有 → 在线拉 → 内置兜底 ----
+# 打包时下载官方运行时安装器随包内置 (打包机网络可靠); 装机时在线拉不动才用兜底。
+# 系统里运行时永远只装一份 (机器级共享, 装前必检测), 兜底文件只是备胎不重复安装。
+# .NET 桌面运行时不内置: 其官方安装器是 MSI 链, 在本产品 MSI 事务内必撞 _MSIExecute 互斥 (run 44886290820 实锤),
+#   仍走 dotnet-install 官方脚本在线路 (加固版三轮重试)。
+$fallbackDir = Join-Path $publishRoot 'fallback'
+New-Item -ItemType Directory -Force -Path $fallbackDir | Out-Null
+$fbItems = @(
+    @{ Name = 'windowsappruntimeinstall-x64.exe'; Url = 'https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe' },
+    @{ Name = 'vc_redist.x64.exe'; Url = 'https://aka.ms/vs/17/release/vc_redist.x64.exe' }
+)
+foreach ($fb in $fbItems) {
+    $dst = Join-Path $fallbackDir $fb.Name
+    if (-not (Test-Path $dst) -or (Get-Item $dst).Length -lt 1MB) {
+        Write-Host "下载内置兜底: $($fb.Name)"
+        Invoke-WebRequest -Uri $fb.Url -OutFile $dst -UseBasicParsing -TimeoutSec 600
+    }
+    if (-not (Test-Path $dst) -or (Get-Item $dst).Length -lt 1MB) { throw "内置兜底文件异常偏小: $($fb.Name)" }
+}
+Write-Host ("内置兜底就绪: " + ((Get-ChildItem $fallbackDir | Measure-Object Length -Sum).Sum / 1MB).ToString('0.0') + " MB")
+
 
 
 
