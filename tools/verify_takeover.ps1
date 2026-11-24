@@ -110,7 +110,22 @@ function Test-InboxHit {
 # (chromium chrome/browser/resources/extensions/service.ts setItemEnabled)。这里用 CDP 在
 # chrome://extensions 页面上下文里调同一 API 模拟用户操作, 不静默跳过: 失败即报红。
 $CdpPort = 9223
+# run 45347122150 实锤: Edge 在 setEnabled 等回包时 CDP 连接被对端中止 (WebSocket 'Aborted'),
+# 启用指令可能已生效但回包丢失。修法两层: ① 连接级重试——连接/发送/接收任何一环断开,
+# 重建连接重试, 最多 3 次; ② 调用方 catch 后照旧轮询 disable_reasons——回包丢了不等于没启用。
 function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
+  for ($try = 1; $try -le 3; $try++) {
+    try {
+      if ($try -gt 1) { Write-Host ("  CDP 连接第 {0} 次重试…" -f $try); Start-Sleep -Seconds 2 }
+      Enable-ExtensionAsUserOnce $Port $ExtId
+      return
+    } catch {
+      if ($try -ge 3) { throw }
+      Write-Host ("  CDP 启用连接中断（{0}），重建连接重试" -f $_.Exception.Message)
+    }
+  }
+}
+function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
   $tgt = $null
   foreach ($m in @('PUT', 'GET')) {
     try { $tgt = Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$Port/json/new?chrome://extensions/" -TimeoutSec 10; break } catch { }
@@ -466,6 +481,15 @@ foreach ($spec in $Browsers) {
       Write-Host ("  模拟用户启用后 disable_reasons={0}" -f ($(if ($dr) { $dr -join ',' } else { '(空)' })))
     } catch {
       Write-Host ("  模拟用户启用失败: {0}" -f $_.Exception.Message)
+      # run 45347122150 实锤: Edge 的 setEnabled 回包因 CDP 连接中止而丢失, 启用可能已生效。
+      # 失败后照旧轮询 disable_reasons, 清零即按启用继续, 不直接判死。
+      for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 2
+        $dr2 = Get-DisableReasons $prof $Id
+        if (-not $dr2 -or @($dr2).Count -eq 0) { $dr = $dr2; break }
+        $dr = $dr2
+      }
+      Write-Host ("  启用失败后复核 disable_reasons={0}" -f ($(if ($dr) { $dr -join ',' } else { '(空)' })))
     }
   }
   if ($dr -and @($dr).Count -gt 0) {
