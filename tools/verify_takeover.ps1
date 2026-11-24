@@ -128,6 +128,17 @@ function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
   }
 }
 function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
+  # run 45367447019 实锤: 重试轮次留下的 chrome://extensions 旧标签页(可能挂着未确认弹窗)不清,
+  # 新标签页的启用会被旧弹窗搅局——每轮先关掉全部 extensions 页再开新页
+  try {
+    $stale = Invoke-RestMethod -Method GET -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 10
+    foreach ($t in @($stale)) {
+      if ($t.url -like '*://extensions/*' -or $t.url -eq 'chrome://extensions/' -or $t.url -eq 'edge://extensions/') {
+        Invoke-RestMethod -Method GET -Uri "http://127.0.0.1:$Port/json/close/$($t.id)" -TimeoutSec 10 | Out-Null
+      }
+    }
+  } catch { }
+  Start-Sleep -Milliseconds 500
   $tgt = $null
   foreach ($m in @('PUT', 'GET')) {
     try { $tgt = Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$Port/json/new?chrome://extensions/" -TimeoutSec 10; break } catch { }
@@ -139,6 +150,9 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
   $ws.ConnectAsync([Uri]$tgt.webSocketDebuggerUrl, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
   try {
     $buf = New-Object byte[] (1MB)
+    # run 45367447019 实锤: setEnabled 与弹窗点击两条命令并发在途, 先到的回包若不是正在等的
+    # id 会被直接丢弃, 后续再等那个 id 就永远等不到——回包按 id 缓存, 谁先来存谁
+    $pending = @{}
     $send = {
       param($obj)
       $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Depth 6 -Compress))
@@ -146,6 +160,7 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
     }
     $recv = {
       param($wantId)
+      if ($pending.ContainsKey($wantId)) { $r = $pending[$wantId]; $pending.Remove($wantId); return $r }
       # run 45352372082 实锤: Edge 的 chrome://extensions WebUI 冷启首帧回包可超 10s
       # (日志 08:19:38.7→08:19:48.7 整 10s 无帧), 单次 receive 10s 超时把 ClientWebSocket
       # 整个 Abort——后续 send 全报 "invalid state ('Aborted')", 3 次重连每轮都撞同一堵墙,
@@ -174,8 +189,10 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
         }
         if ($ms.Length -eq 0) { continue }  # 本轮未收到完整帧, 回外层查总期限
         $msg = [Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
-        if ($msg.id -ne $wantId) { continue }  # 事件帧跳过, 只认命令回包
-        return $msg
+        if ($null -eq $msg.id) { continue }  # 事件帧跳过, 只认命令回包
+        if ($msg.id -eq $wantId) { return $msg }
+        $pending[$msg.id] = $msg  # 别的 id 的回包先缓存, 不丢
+        continue
       }
       return $null
     }
@@ -233,6 +250,53 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
     # 用户手势, 不带该标记 setEnabled 直接抛 "requires a user gesture"; Chrome/Chromium 同路
     # 不带也能过, 带上对它们无副作用——统一带上, 与真实用户点开关同语义
     & $send @{ id = 2; method = 'Runtime.evaluate'; params = @{ expression = "chrome.management.setEnabled('$ExtId', true)"; awaitPromise = $true; returnByValue = $true; userGesture = $true } }
+    # run 45367447019 实锤: Edge 的 setEnabled 回包永远不来 (就绪探测秒回、唯独 setEnabled 挂死
+    # 60s×5 全灭, disable_reasons 仍 8192)——promise 被外部扩展确认弹窗拦住, 等真实用户点"允许"。
+    # 修法: setEnabled 发出后不干等, 立即在页面里找确认弹窗 (cr-dialog/role=dialog) 点掉
+    # (真实用户就是点"允许"), 再收 setEnabled 回包; 回包有缓存不丢。无弹窗 (Chrome/Chromium)
+    # 时探测几秒返回 no-dialog, setEnabled 回包早已缓存, 流程不变。
+    $dialogJs = @'
+(async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const affirmative = /^(允许|启用|确定|确认|打开|添加|继续|信任|allow|enable|confirm|ok|yes|add|continue|trust|turn\s*on)\s*[.…!]?$/i;
+  const collectBtns = (root, out) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) collectBtns(el.shadowRoot, out);
+      if (el.tagName === 'CR-BUTTON' || el.tagName === 'BUTTON') out.push(el);
+    }
+  };
+  for (let t = 0; t < 24; t++) {
+    const dialogs = [];
+    const walkD = (root) => {
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) walkD(el.shadowRoot);
+        if (el.tagName === 'CR-DIALOG' || (el.getAttribute && el.getAttribute('role') === 'dialog')) {
+          const cs = getComputedStyle(el);
+          if (cs.display !== 'none' && cs.visibility !== 'hidden') dialogs.push(el);
+        }
+      }
+    };
+    walkD(document);
+    if (dialogs.length) {
+      const btns = [];
+      for (const d of dialogs) collectBtns(d, btns);
+      const visible = btns.filter(b => b.offsetParent !== null);
+      let target = visible.find(b => (b.className || '').toString().includes('action-button'));
+      if (!target) target = visible.find(b => affirmative.test((b.textContent || '').trim()));
+      if (target) { const txt = (target.textContent || '').trim(); target.click(); return 'clicked:' + txt; }
+    }
+    await sleep(500);
+  }
+  return 'no-dialog';
+})()
+'@
+    & $send @{ id = 3; method = 'Runtime.evaluate'; params = @{ expression = $dialogJs; awaitPromise = $true; returnByValue = $true; userGesture = $true } }
+    $resp3 = & $recv 3
+    if ($resp3 -and -not $resp3.error -and -not $resp3.result.exceptionDetails) {
+      Write-Host ("  确认弹窗处理结果: {0}" -f $resp3.result.result.value)
+    } else {
+      Write-Host '  确认弹窗探测未返回（继续等 setEnabled 回包）'
+    }
     $resp2 = & $recv 2
     if (-not $resp2) { throw 'CDP setEnabled 无回包' }
     if ($resp2.error) { throw ("CDP setEnabled 失败: " + ($resp2.error | ConvertTo-Json -Compress)) }
