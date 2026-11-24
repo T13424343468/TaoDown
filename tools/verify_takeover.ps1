@@ -114,13 +114,15 @@ $CdpPort = 9223
 # 启用指令可能已生效但回包丢失。修法两层: ① 连接级重试——连接/发送/接收任何一环断开,
 # 重建连接重试, 最多 3 次; ② 调用方 catch 后照旧轮询 disable_reasons——回包丢了不等于没启用。
 function Enable-ExtensionAsUser([int]$Port, [string]$ExtId) {
-  for ($try = 1; $try -le 3; $try++) {
+  # run 45361560341 实锤: 3 次重试每轮 25s 无帧全灭, Edge WebUI 冷启可超 25s——重试加到 5 次,
+  # 配合单次收包 60s, 给慢 WebUI 总计 5 分钟有界窗口
+  for ($try = 1; $try -le 5; $try++) {
     try {
       if ($try -gt 1) { Write-Host ("  CDP 连接第 {0} 次重试…" -f $try); Start-Sleep -Seconds 2 }
       Enable-ExtensionAsUserOnce $Port $ExtId
       return
     } catch {
-      if ($try -ge 3) { throw }
+      if ($try -ge 5) { throw }
       Write-Host ("  CDP 启用连接中断（{0}），重建连接重试" -f $_.Exception.Message)
     }
   }
@@ -131,6 +133,8 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
     try { $tgt = Invoke-RestMethod -Method $m -Uri "http://127.0.0.1:$Port/json/new?chrome://extensions/" -TimeoutSec 10; break } catch { }
   }
   if (-not $tgt -or -not $tgt.webSocketDebuggerUrl) { throw 'CDP 打开 chrome://extensions 失败' }
+  # run 45361560341 实锤: 连上即发 evaluate, Edge WebUI 尚在冷启, 首帧迟迟不来——先给 10s 预热
+  Start-Sleep -Seconds 10
   $ws = [System.Net.WebSockets.ClientWebSocket]::new()
   $ws.ConnectAsync([Uri]$tgt.webSocketDebuggerUrl, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
   try {
@@ -145,22 +149,24 @@ function Enable-ExtensionAsUserOnce([int]$Port, [string]$ExtId) {
       # run 45352372082 实锤: Edge 的 chrome://extensions WebUI 冷启首帧回包可超 10s
       # (日志 08:19:38.7→08:19:48.7 整 10s 无帧), 单次 receive 10s 超时把 ClientWebSocket
       # 整个 Abort——后续 send 全报 "invalid state ('Aborted')", 3 次重连每轮都撞同一堵墙,
-      # 启用永远落不了地。修法: 单次 receive 超时放宽到 25s、总期限 60s——仍是有界等待
-      # (run 45217460009 的 210 分钟挂死防线不变), 但慢 WebUI 有足够时间回帧。
-      $deadline = [DateTime]::UtcNow.AddSeconds(60)
+      # 启用永远落不了地。run 45361560341 复锤: 25s 仍不够 (09:22:08→09:22:34 整 25s 无帧,
+      # 3 轮重试全灭)。修法: 单次 receive 放宽到 60s、总期限 240s——仍是有界等待
+      # (run 45217460009 的 210 分钟挂死防线不变), 慢 WebUI 有足够时间回帧;
+      # 取消即中止连接, 超时后直接抛出交外层重建, 不再向已中止的 socket 发送。
+      $deadline = [DateTime]::UtcNow.AddSeconds(240)
       while ([DateTime]::UtcNow -lt $deadline) {
         $ms = [System.IO.MemoryStream]::new()
         while ($true) {
           $seg = [ArraySegment[byte]]::new($buf)
           # run 45217460009 实锤: ReceiveAsync 用 CancellationToken.None 时, 浏览器侧一旦
-          # 不回帧 (WebUI 挂起/连接半死), 这里永久阻塞——30s 期限只在两次 receive 之间检查,
-          # 拦不住单次阻塞, 整步被拖到 210 分钟整场超时被取消。保留单次 receive 超时 (25s),
-          # 超时回外层查总期限, 期限到返回 $null 由调用方按失败报红。
-          $rxCts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(25))
+          # 不回帧 (WebUI 挂起/连接半死), 这里永久阻塞——期限只在两次 receive 之间检查,
+          # 拦不住单次阻塞, 整步被拖到 210 分钟整场超时被取消。保留单次 receive 超时 (60s),
+          # 取消会中止整条连接, 直接抛出交外层重建重试, 不复用已中止的 socket。
+          $rxCts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(60))
           try {
             $r = $ws.ReceiveAsync($seg, $rxCts.Token).GetAwaiter().GetResult()
           } catch [System.OperationCanceledException] {
-            break  # 25 秒无帧, 回外层查总期限
+            throw 'CDP 单次收包 60s 无帧（取消即中止连接），重建连接重试'
           } finally { $rxCts.Dispose() }
           if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { throw 'CDP 连接被对端关闭' }
           $ms.Write($buf, 0, $r.Count)
