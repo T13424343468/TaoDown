@@ -16,9 +16,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>2.4.4</Version>
-    <FileVersion>2.4.4.0</FileVersion>
-    <AssemblyVersion>2.4.4.0</AssemblyVersion>
+    <Version>2.4.5</Version>
+    <FileVersion>2.4.5.0</FileVersion>
+    <AssemblyVersion>2.4.5.0</AssemblyVersion>
     <AssemblyName>TaoDown</AssemblyName>
     <ApplicationIcon>Assets\taodown.ico</ApplicationIcon>
   </PropertyGroup>
